@@ -1,0 +1,153 @@
+# compose.yaml
+# Изолированный project state; только worker и beat используют external shared RabbitMQ.
+name: warehouse-perimeter-watch
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+x-app: &app
+  build:
+    context: .
+    target: base
+  env_file:
+    - path: .env.example
+    - path: .env
+      required: false
+  environment:
+    PYTHONPATH: /app/src
+    MEDIA_ROOT: /app/media
+    POSTGRES_HOST: postgres
+  volumes:
+    - media:/app/media
+  networks: [private]
+  restart: unless-stopped
+  logging: *logging
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17.11-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-warehouse_watch}
+      POSTGRES_USER: ${POSTGRES_USER:-warehouse_watch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    networks: [private]
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4.11-bookworm
+    command: [redis-server, --save, '', --appendonly, 'no', --maxmemory, 256mb, --maxmemory-policy, allkeys-lru]
+    networks: [private]
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  web:
+    <<: *app
+    ports: ['${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-8080}:8000']
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://localhost:8000/health/ready", timeout=5)']
+      interval: 15s
+      timeout: 8s
+      retries: 5
+  vision:
+    <<: *app
+    build:
+      context: .
+      target: vision
+    command: [python, -m, workers.vision]
+    volumes: [media:/app/media, './models:/app/models:ro']
+    healthcheck:
+      test: [CMD, python, -c, 'import os, redis; assert redis.Redis.from_url(os.environ["REDIS_URL"]).get("warehouse:vision:ready")']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+  notification-worker:
+    <<: *app
+    command: [celery, -A, workers.celery_app, worker, --loglevel=INFO, --concurrency=2, -Q, warehouse.notifications]
+    networks: [private, shared]
+  scheduler:
+    <<: *app
+    command: [celery, -A, workers.celery_app, beat, --loglevel=INFO, --schedule=/app/.cache/celerybeat-schedule]
+    networks: [private, shared]
+  test-postgres:
+    image: postgres:17.11-bookworm
+    profiles: [tests]
+    environment:
+      POSTGRES_DB: warehouse_tests
+      POSTGRES_USER: warehouse_tests
+      POSTGRES_PASSWORD: isolated-tests-only
+    tmpfs: [/var/lib/postgresql/data]
+    networks: [test-private]
+    logging: *logging
+    healthcheck:
+      test: [CMD, pg_isready, -U, warehouse_tests, -d, warehouse_tests]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  test-redis:
+    image: redis:7.4.11-bookworm
+    profiles: [tests]
+    networks: [test-private]
+    logging: *logging
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  tests:
+    build:
+      context: .
+      target: testing
+    profiles: [tests]
+    env_file:
+      - path: .env.example
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: testing
+      DJANGO_SETTINGS_MODULE: config.testing
+      DATABASE_ENGINE: postgresql
+      POSTGRES_HOST: test-postgres
+      POSTGRES_DB: warehouse_tests
+      POSTGRES_USER: warehouse_tests
+      POSTGRES_PASSWORD: isolated-tests-only
+      REDIS_URL: redis://test-redis:6379/0
+      TEST_EXTERNAL_SERVICES: 'true'
+      RUN_E2E: 'true'
+      NOTIFICATIONS_ENABLED: 'false'
+      MEDIA_ROOT: /tmp/warehouse-test-media
+    networks: [test-private, shared]
+    logging: *logging
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+
+networks:
+  private: {}
+  test-private:
+    internal: true
+  shared:
+    external: true
+    name: ${SHARED_NETWORK:-ai-shared}
+volumes:
+  postgres-data: {}
+  media: {}

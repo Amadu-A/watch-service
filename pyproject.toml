@@ -1,0 +1,32 @@
+# pyproject.toml
+# Зависимости Django-монолита; vision устанавливается отдельно только в vision image.
+[project]
+name = "warehouse-perimeter-watch"
+version = "0.1.0"
+description = "Видеоконтроль пересечения периметра склада"
+requires-python = ">=3.14"
+dependencies = [
+  "django>=6.1.2", "djangorestframework>=3.16,<3.17",
+  "drf-spectacular>=0.28,<0.30", "pydantic-settings>=2.9,<3",
+  "psycopg[binary]>=3.2,<4", "redis>=6,<8", "celery>=5.5,<5.7",
+  "cryptography>=45,<48", "httpx>=0.28,<0.29", "Pillow>=11,<13",
+  "reportlab>=4.4,<5", "gunicorn>=23,<24", "whitenoise>=6.9,<7",
+  "tzdata>=2025.2",
+]
+[project.optional-dependencies]
+vision = ["ultralytics>=8.3,<9", "opencv-python>=4.11,<5", "lap>=0.5.12,<0.6"]
+[dependency-groups]
+dev = ["pytest>=8.4,<10", "pytest-django>=4.11,<5", "pytest-cov>=6,<8", "ruff>=0.11,<0.16", "playwright>=1.52,<2", "numpy>=2,<3", "opencv-python>=4.11,<5"]
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.testing"
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--strict-markers -p no:cacheprovider"
+markers = ["integration: проверка внешних адаптеров", "e2e: браузерные сценарии", "regression: защита от повторных ошибок"]
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+[tool.ruff.lint.per-file-ignores]
+"src/**/migrations/*.py" = ["E501"]

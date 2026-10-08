@@ -1,0 +1,4 @@
+<!-- src/web/templates/pages/violation.html: Event detail с evidence download и историей notification attempts. -->
+{% extends 'base.html' %}{% load static %}
+{% block scripts %}<script type="module" src="{% static 'js/features/violations.js' %}" defer></script>{% endblock %}
+{% block content %}<a href="/violations/">← Нарушения</a><h1>Карточка нарушения</h1><section class="panel"><dl class="details" data-event-details></dl><div class="split" data-event-photos></div><div class="form__actions" data-event-actions></div><h2 class="panel__title">История доставки</h2><div data-event-deliveries></div></section>{% endblock %}

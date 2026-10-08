@@ -1,0 +1,13 @@
+<!-- src/web/templates/components/header.html: Навигация и POST logout с CSRF для всех страниц. -->
+<header class="header">
+  <a class="header__brand" href="/monitoring/"><img class="header__shield" src="/static/images/shield.svg" alt="">Склад. Видеоконтроль</a>
+  <nav class="header__nav" aria-label="Основная навигация">
+    <a class="header__link {% if page == 'monitoring' %}header__link--active{% endif %}" href="/monitoring/">▣ Мониторинг</a>
+    <a class="header__link {% if page == 'violations' or page == 'violation' %}header__link--active{% endif %}" href="/violations/">⚠ Нарушения</a>
+    <a class="header__link {% if page == 'reports' %}header__link--active{% endif %}" href="/reports/">▤ Отчёты</a>
+    <a class="header__link {% if page == 'notifications' %}header__link--active{% endif %}" href="/notifications/">♧ Уведомления</a>
+    <a class="header__link {% if page == 'cameras' or page == 'camera' %}header__link--active{% endif %}" href="/cameras/">▱ Камеры</a>
+    <a class="header__link {% if page == 'settings' %}header__link--active{% endif %}" href="/settings/">⚙ Настройки</a>
+  </nav>
+  <details class="header__account"><summary>{{ user.username }}</summary><p>{% if user.is_superuser %}Администратор{% else %}{{ user.get_role_display }}{% endif %}</p><form method="post" action="/logout/">{% csrf_token %}<button class="button" type="submit">Выйти</button></form></details>
+</header>

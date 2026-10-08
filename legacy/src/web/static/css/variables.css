@@ -1,0 +1,2 @@
+/* src/web/static/css/variables.css: Цвета и размеры тёмного кабинета по рендеру. */
+:root { color-scheme: dark; --bg:#0c121a; --panel:#121b25; --input:#192330; --border:#263342; --text:#edf2fa; --muted:#98a7bc; --blue:#397aff; --red:#ff5362; --green:#27d36b; --orange:#ffb340; --radius:8px; --gap:14px; font-family:Inter, "Segoe UI", Arial, sans-serif; }

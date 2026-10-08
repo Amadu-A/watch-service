@@ -1,0 +1,20 @@
+# .github/workflows/checks.yaml
+# CI использует ту же watch.sh инструкцию, SQLite и synthetic frames без камер/GPU.
+name: quality
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.26'
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bash scripts/watch.sh browsers
+      - run: bash scripts/watch.sh local-check

@@ -1,0 +1,26 @@
+# .dockerignore
+# Образ получает исходники и безопасный каталог конфигурации, без секретов и видеозаписей.
+.git
+.env
+.env.*
+!.env.example
+.venv
+.cache
+**/__pycache__
+.pytest_cache
+.ruff_cache
+media
+staticfiles
+models
+node_modules
+test-results
+.idea
+.codex
+.coverage*
+.aws
+.agents
+.vscode
+*.sqlite3
+*.sqlite3-*
+*.log
+source.tar.gz
