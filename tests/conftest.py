@@ -1,63 +1,111 @@
 # tests/conftest.py
-"""Изолированные fixtures; SQLite по умолчанию, PostgreSQL при container integration запуске."""
+"""
+Общие фикстуры автоматических тестов Warehouse Perimeter Watch.
+
+Bootstrap-тесты выполняются без импортов ещё не перенесённого
+legacy-кода. Для существующих unit, integration, architecture
+и E2E тестов сохраняются прежние fixtures и их поведение.
+
+После переноса composition root импорты будут приведены
+к утверждённой структуре проекта.
+"""
+
+from __future__ import annotations
 
 import os
-
-os.environ.setdefault("DATABASE_ENGINE", "sqlite")
-os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
-os.environ.setdefault("CAMERA_CREDENTIALS_KEY", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
+from pathlib import Path
 
 import pytest
 from rest_framework.test import APIClient
 
-from core import container as c
+os.environ.setdefault("DATABASE_ENGINE", "sqlite")
+os.environ.setdefault(
+    "DJANGO_ALLOWED_HOSTS",
+    "localhost,127.0.0.1,testserver",
+)
+os.environ.setdefault(
+    "CAMERA_CREDENTIALS_KEY",
+    "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+)
+
+TESTS_ROOT = Path(__file__).resolve().parent
 
 
 class FakeFrameCache:
-    """Ephemeral fake с тем же get/put контрактом, без подключения к Redis."""
+    """Хранит тестовые кадры в памяти без подключения к Redis."""
 
-    def __init__(self):
-        """Хранит тестовые кадры в памяти одного test case."""
-        self.values = {}
+    def __init__(self) -> None:
+        """Создаёт независимое хранилище тестовых кадров."""
+        self.values: dict = {}
         self.client = self
 
     def get(self, camera_id):
-        """Возвращает только заранее положенный кадр."""
+        """Возвращает кадр камеры, если он был сохранён фикстурой."""
         return self.values.get(camera_id)
 
-    def put(self, camera_id, jpeg):
-        """Обновляет последний frame без persistence business state."""
+    def put(self, camera_id, jpeg) -> None:
+        """Сохраняет последний тестовый кадр камеры."""
         self.values[camera_id] = jpeg
 
-    def ping(self):
-        """Отмечает fake dependency доступной для readiness tests."""
+    def ping(self) -> bool:
+        """Подтверждает доступность fake-зависимости."""
         return True
 
 
 @pytest.fixture(autouse=True)
-def isolated_dependencies(monkeypatch, tmp_path):
-    """Подменяет frame cache и media root, не меняя существующий приватный .env."""
+def isolated_dependencies(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """
+    Изолирует инфраструктуру каждого теста.
+
+    Корневые bootstrap-тесты не зависят от legacy composition root.
+    В остальных тестах сохраняются исторические подмены Redis,
+    RTSP probe, media storage и process configuration.
+    """
+    if request.node.path.parent == TESTS_ROOT:
+        yield FakeFrameCache()
+        return
+
+    # Временный импорт до переноса legacy/src/core/container.py.
+    # Это НЕ создание новой реализации и НЕ фиктивный core-модуль.
+    from core import container as c
+
     c.configuration.cache_clear()
     c.frames.cache_clear()
+
     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+
     cache = FakeFrameCache()
+
     monkeypatch.setattr(c, "frames", lambda: cache)
     monkeypatch.setattr(c, "probe", lambda connection: True)
+
     yield cache
+
     c.configuration.cache_clear()
 
 
 @pytest.fixture
 def admin(db, django_user_model):
-    """Создаёт администратора для API permission и CRUD сценариев."""
+    """
+    Создаёт администратора для тестирования API.
+
+    Зависит от custom user model, которая будет перенесена
+    из legacy на этапе миграции accounts.
+    """
     return django_user_model.objects.create_user(
-        username="admin", password="local-test-password", role="ADMINISTRATOR"
+        username="admin",
+        password="local-test-password",
+        role="ADMINISTRATOR",
     )
 
 
 @pytest.fixture
 def client_api(admin):
-    """Аутентифицирует test client штатным Django session context."""
+    """Создаёт авторизованный DRF-клиент с правами тестового администратора."""
     client = APIClient()
     client.force_authenticate(user=admin)
     return client
@@ -65,7 +113,12 @@ def client_api(admin):
 
 @pytest.fixture
 def camera(client_api):
-    """Регистрирует камеру только через внешний write contract."""
+    """
+    Создаёт тестовую камеру через публичный API.
+
+    Проверяет создание камеры через HTTP-контракт, а не прямую
+    запись ORM. Фикстура заработает после переноса camera API.
+    """
     response = client_api.post(
         "/api/v1/cameras",
         {
@@ -79,5 +132,7 @@ def camera(client_api):
         },
         format="json",
     )
+
     assert response.status_code == 201, response.data
+
     return response.data["data"]
