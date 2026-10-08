@@ -40,9 +40,7 @@ def test_settings_remain_single_python_module() -> None:
 def test_testing_database_is_isolated() -> None:
     """Не допускает использование production PostgreSQL в bootstrap-тестах."""
     assert settings.APP_ENV == "testing"
-    assert settings.DATABASES["default"]["ENGINE"] == (
-        "django.db.backends.sqlite3"
-    )
+    assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
 
 
 def test_notifications_are_disabled() -> None:

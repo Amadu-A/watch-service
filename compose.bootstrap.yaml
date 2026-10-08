@@ -1,0 +1,79 @@
+
+# compose.bootstrap.yaml
+# Временный изолированный Docker Compose для проверки нового Django-каркаса.
+# Не создаёт PostgreSQL, Redis, RabbitMQ, persistent volumes или GPU workloads.
+# Не подключается к ai-shared и не управляет чужими контейнерами.
+
+name: warehouse-watch-bootstrap
+
+x-bootstrap: &bootstrap
+  image: warehouse-watch-bootstrap:local
+  build:
+    context: .
+    dockerfile: Dockerfile.bootstrap
+  working_dir: /app
+  read_only: true
+  tmpfs:
+    - /tmp
+  restart: "no"
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  environment: &bootstrap-environment
+    APP_ENV: testing
+    DJANGO_SETTINGS_MODULE: config.testing
+    DATABASE_ENGINE: sqlite
+    DJANGO_DEBUG: "false"
+    DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+    DJANGO_SECURE_COOKIES: "false"
+    NOTIFICATIONS_ENABLED: "false"
+    EMAIL_NOTIFICATIONS_ENABLED: "false"
+    TELEGRAM_NOTIFICATIONS_ENABLED: "false"
+    EVENT_CLIP_ENABLED: "false"
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  check:
+    <<: *bootstrap
+    network_mode: none
+    command:
+      - python
+      - manage.py
+      - check
+
+  tests:
+    <<: *bootstrap
+    network_mode: none
+    command:
+      - pytest
+      - -v
+      - tests/test_django_bootstrap.py
+
+  web:
+    <<: *bootstrap
+    profiles:
+      - manual
+    environment:
+      <<: *bootstrap-environment
+      APP_ENV: development
+      DJANGO_SETTINGS_MODULE: config.settings
+    ports:
+      - "127.0.0.1:8086:8000"
+    command:
+      - gunicorn
+      - config.wsgi:application
+      - --bind
+      - 0.0.0.0:8000
+      - --workers
+      - "1"
+      - --threads
+      - "2"
+      - --timeout
+      - "30"
+      - --access-logfile
+      - "-"

@@ -1,0 +1,45 @@
+
+# Dockerfile.bootstrap
+# Изолированный образ проверки Django bootstrap до миграции legacy.
+# Используется только compose.bootstrap.yaml; production Dockerfile не заменяет.
+
+FROM python:3.14-slim-bookworm
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_NO_PROGRESS=1 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
+
+RUN groupadd --gid 10001 watcher \
+    && useradd \
+        --uid 10001 \
+        --gid watcher \
+        --create-home \
+        watcher
+
+# Установка строго из существующего lock-файла.
+# dev-зависимости нужны для pytest; vision extra не устанавливается.
+COPY pyproject.toml uv.lock .env.example ./
+
+RUN uv sync \
+    --locked \
+    --no-install-project \
+    --no-extra vision
+
+# Копируем только новую структуру и перемещённые тесты.
+# legacy-код не добавляется в PYTHONPATH.
+COPY --chown=watcher:watcher manage.py ./
+COPY --chown=watcher:watcher src ./src
+COPY --chown=watcher:watcher tests ./tests
+
+USER watcher
+
+EXPOSE 8000
+
+CMD ["python", "manage.py", "check"]
