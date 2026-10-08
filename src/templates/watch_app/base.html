@@ -1,0 +1,19 @@
+<!-- src/web/templates/base.html: Общий каркас защищённого кабинета; JS только в head после CSS. -->
+{% load static %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title|default:'Вход' }} · Склад. Видеоконтроль</title>
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
+  <script type="module" src="{% static 'js/app.js' %}" defer></script>
+  {% block scripts %}{% endblock %}
+</head>
+<body class="page" data-page="{{ page }}" data-object-id="{{ pk }}" data-can-configure="{{ can_configure|yesno:'true,false' }}" data-can-retry="{{ can_retry|yesno:'true,false' }}">
+  {% if user.is_authenticated %}{% include 'components/header.html' %}{% endif %}
+  <main class="page__content">{% block content %}{% endblock %}</main>
+  <footer class="page__footer">Warehouse Perimeter Watch · <a href="/license/">AGPL-3.0</a> · Без гарантий · {% if user.is_authenticated %}<a href="/source/">Исходный код этой версии</a>{% endif %}</footer>
+  <p class="toast" role="status" aria-live="polite" data-toast hidden></p>
+</body>
+</html>

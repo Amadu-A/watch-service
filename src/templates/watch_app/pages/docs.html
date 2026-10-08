@@ -1,0 +1,4 @@
+<!-- src/web/templates/pages/docs.html: Локальная OpenAPI справка без inline JS и внешних CDN. -->
+{% extends 'base.html' %}{% load static %}
+{% block scripts %}<script type="module" src="{% static 'js/features/docs.js' %}" defer></script>{% endblock %}
+{% block content %}<h1>API Warehouse Perimeter Watch</h1><section class="panel"><p>Сессионная авторизация Django и CSRF. Даты содержат часовой пояс. Интервал фильтрации: [начало, конец).</p><a href="/api/schema/?format=json">Скачать OpenAPI JSON</a><div data-api-docs></div></section>{% endblock %}
