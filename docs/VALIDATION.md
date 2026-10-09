@@ -16,33 +16,41 @@ Branch coverage всего проекта — 80%; публикация CPU-ка
 с camera/session/sequence и нормализованными person tracks, скрытие токенов,
 сохранение правил пересечения/расписания/evidence и отсутствие GPU/ML runtime.
 Свежий Celery process загружает Django и регистрирует задачи без внешнего broker.
-Контейнерный test проверит реального Celery consumer с проектными правами.
+Контейнерный test успешно проверил реального Celery consumer с проектными правами.
 
-В предоставленном предыдущем серверном прогоне: 105 прошло, 1 падение из-за DNS
-RabbitMQ. Среди запущенных контейнеров shared-rabbitmq-1 отсутствовал.
-Новая предпроверка обнаруживает недоступный DNS/AMQP до сборки тестового образа;
-provisioning сообщает состояние/неудачную команду без пароля.
-В последнем выводе камеры подтверждён доступ к 192.168.55.9:554, но отсутствовали
-capture/vision и ключи `warehouse:frame:*`. Постоянный CPU capture устраняет эту
-зависимость просмотра от VISION_ENABLED. Реальный RTSP проверяется на сервере.
+В серверном прогоне сборки `60b008b`: 134 tests прошло, включая реальные
+PostgreSQL/Redis/RabbitMQ и временный Celery consumer. Единственное падение —
+архитектурный test не нашёл `/app/compose.yaml`: файл был в стадии `source` и
+архиве исходников, но не копировался в рабочий каталог стадии `testing`.
+Dockerfile исправлен: `compose.yaml` копируется вместе с `package.json`.
+Архитектурный test сохранён без пропусков и ослабления проверок.
+
+Ошибка воспроизведена локально на отдельном файловом наборе из COPY-инструкций
+Dockerfile: до изменения 1 падение и 7 успешных архитектурных tests, после
+изменения — все 8 прошли. Это проверяет состав файлов для tests; фактическая
+Linux-сборка образа выполняется на сервере, поскольку локальный daemon недоступен.
+
+`deploy` в том прогоне остановился на tests до миграций и пересоздания рабочих
+процессов. Поэтому отсутствие camera-capture и перезапуск старого worker в status
+относятся к ещё не обновлённым контейнерам. После публикации владельцем требуется
+повторный `watch.sh deploy`; настройки `.env` и RabbitMQ уже прошли предпроверку.
 
 ## Сервер после публикации владельцем
+
+Конфигурация `.env` и AMQP-доступ уже прошли проверку в предоставленном логе.
+Для исправления состава тестового образа повторите обновление и развёртывание:
 
 ```bash
 cd /home/main/projects/watch-service
 git pull --ff-only origin main
-sed -i '/^VISION_\(ENABLED\|DEVICE\|GPU_ID\|MODEL\)=/d' .env
-# Если существующий shared брокер остановлен, оператор запускает его:
-docker start shared-rabbitmq-1
-bash scripts/watch.sh rabbit shared-rabbitmq-1
-bash scripts/watch.sh test-containers
 bash scripts/watch.sh deploy
 bash scripts/watch.sh status
 ```
 
-`deploy` повторяет tests до миграций. При падении проверки рабочие процессы не
-пересоздаются. В status должны быть web, camera-capture, PostgreSQL, Redis,
-notification-worker и scheduler. Inference отсутствует до согласования CV API.
+`deploy` пересобирает образы и выполняет все контейнерные tests до миграций.
+При падении проверки рабочие процессы не пересоздаются. В status должны быть
+web, camera-capture, PostgreSQL, Redis, notification-worker и scheduler.
+Inference отсутствует до согласования CV API.
 
 ## Ручная приёмка
 

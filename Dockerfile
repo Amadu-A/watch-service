@@ -42,7 +42,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/*
 RUN uv sync --frozen && uv run --no-sync playwright install --with-deps --no-shell chromium
 COPY tests ./tests
-COPY package.json ./
+# Архитектурные тесты читают Compose-манифест из /app.
+COPY package.json compose.yaml ./
 RUN chown -R watcher:watcher /app /opt/playwright
 USER watcher
 CMD ["pytest", "-q", "--tb=short", "-m", "not e2e"]
