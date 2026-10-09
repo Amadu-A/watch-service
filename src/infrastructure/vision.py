@@ -1,3 +1,4 @@
+
 # src/infrastructure/vision.py
 """CPU-декодирование RTSP и JPEG/MP4 разметка без нейросетевых моделей."""
 
@@ -54,11 +55,12 @@ class RTSPCameraSource:
 
     def __init__(self, connection: dict):
         """Открывает поток через FFmpeg TCP; timeout исключает вечный reconnect."""
-        import cv2
-
-        cv2.setLogLevel(0)
+        os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
         os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
         os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+
+        import cv2
+
         self.capture = cv2.VideoCapture(
             connection_url(connection),
             cv2.CAP_FFMPEG,
@@ -138,7 +140,10 @@ class OpenCVFrameRenderer:
         try:
             height, width = frames[0].shape[:2]
             writer = cv2.VideoWriter(
-                str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+                str(path),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                fps,
+                (width, height),
             )
             if not writer.isOpened():
                 return None
@@ -162,7 +167,7 @@ class OpenCVFrameRenderer:
                     "-crf",
                     "25",
                     "-vf",
-                    "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                    "pad=ceil(iw/2)*2:ceil(iH/2)*2",
                     "-pix_fmt",
                     "yuv420p",
                     "-movflags",
