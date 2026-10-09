@@ -1,6 +1,6 @@
 
 # compose.bootstrap.yaml
-# Временный изолированный Docker Compose для проверки нового Django-каркаса.
+# Временный изолированный Docker Compose для проверки изолированного Django-каркаса после переноса кода.
 # Не создаёт PostgreSQL, Redis, RabbitMQ, persistent volumes или GPU workloads.
 # Не подключается к ai-shared и не управляет чужими контейнерами.
 

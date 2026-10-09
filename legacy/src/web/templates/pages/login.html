@@ -1,6 +1,0 @@
-<!-- src/web/templates/pages/login.html: Django login form без собственных auth shortcuts. -->
-{% extends 'base.html' %}
-{% block content %}
-<section class="panel login"><img class="header__shield" src="/static/images/shield.svg" alt=""><h1>Склад. Видеоконтроль</h1><p class="panel__hint">Войдите в кабинет видеонаблюдения</p>
-<form class="form" method="post">{% csrf_token %}{{ form.as_p }}<input type="hidden" name="next" value="{{ next }}"><button class="button button--primary" type="submit">Войти</button></form></section>
-{% endblock %}

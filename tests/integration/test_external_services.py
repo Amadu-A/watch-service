@@ -13,7 +13,7 @@ from redis import Redis
 
 from core import container as c
 from core.config import Settings
-from modules.persistence.models import NotificationDelivery
+from persistence_app.models import NotificationDelivery
 
 pytestmark = [
     pytest.mark.integration,

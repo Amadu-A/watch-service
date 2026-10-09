@@ -10,7 +10,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from core import container as c
-from modules.persistence.models import Camera, CameraCredential
+from persistence_app.models import Camera, CameraCredential
 
 pytestmark = pytest.mark.django_db
 

@@ -28,29 +28,25 @@ UI не может обойти серверные флаги. Redis храни�
 
 ## Структура
 
-```text
-src/
-  config/                  настройки Django, маршруты, WSGI, тестовое окружение
-  core/                    configuration, ports, timing, composition root, общие adapters
-  modules/
-    accounts/              пользователи и роли
-    cameras/               application и infrastructure камер
-    surveillance/          domain геометрии/расписания, пайплайн, vision adapters
-    violations/            события и защищённые доказательства
-    notifications/         получатели, доставка, outbox и senders
-    reports/               генерация, история и скачивание
-    dashboard/             раскладка, расписание и параметры объекта
-    persistence/           единая ORM-схема, миграции и retention
-  web/                     class-based HTTP transport, шаблоны, BEM CSS, JS modules
-  workers/                 vision orchestration и тонкие Celery tasks
-tests/                     unit, integration, regression, architecture, frontend, E2E
-scripts/watch.sh            единственная инструкция всех операционных команд
-docs/                      правила разработки, запуск, проверка и ограничения
-```
+    src/config/              настройки Django и маршруты
+    src/core/                типизированная конфигурация, DI, logging, timing
+    src/domain/              чистые правила геометрии и расписания
+    src/application/         use-cases и порты камер, мониторинга, событий, отчётов
+    src/repositories/        адаптеры Django ORM
+    src/infrastructure/      RTSP, YOLO, Redis, media, PDF, SMTP, Telegram
+    src/interface/           CBV, DRF, сериализаторы и HTTP ошибки
+    src/accounts_app/        пользователи, роль и миграция с label accounts
+    src/persistence_app/     бизнес-модели и миграция с label persistence
+    src/workers/             vision и Celery процессы
+    templates/, static/      кабинет по рендеру renders/img.png
+    tests/                   unit, functional, regression, architecture,
+                             integration, frontend и E2E
+    scripts/watch.sh         локальные и серверные команды
+    legacy/                  архив старой конфигурации вне runtime
 
-ORM объединён в `persistence`, чтобы миграции и ссылки не образовывали циклы.
-Логические модули сохраняют свои application ports и инфраструктурные репозитории.
-Все concrete dependencies собирает `src/core/container.py`; HTTP views получают factories через `.as_view()`.
+Метки Django-приложений `accounts` и `persistence` сохраняют имена существующих
+таблиц и историю миграций. Конкретные зависимости собирает `src/core/container.py`;
+HTTP views получают готовые factories в маршрутизации.
 
 ## Поток обработки
 

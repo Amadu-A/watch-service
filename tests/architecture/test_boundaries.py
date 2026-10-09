@@ -22,9 +22,7 @@ def test_application_domain_dependencies():
         "httpx",
         "requests",
     )
-    for path in (ROOT / "src/modules").rglob("*.py"):
-        if not {"application", "domain"} & set(path.parts):
-            continue
+    for path in [*(ROOT / "src/application").rglob("*.py"), *(ROOT / "src/domain").rglob("*.py")]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             names = (
@@ -55,7 +53,7 @@ def test_http_endpoints_are_cbv():
 
 def test_transport_and_workers_do_not_construct_adapters():
     """HTTP transport не читает ORM; worker использует только root factories и injected ports."""
-    paths = list((ROOT / "src/web").glob("*.py")) + list((ROOT / "src/workers").glob("*.py"))
+    paths = list((ROOT / "src/interface").glob("*.py")) + list((ROOT / "src/workers").glob("*.py"))
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -81,13 +79,30 @@ def test_project_python_docs_are_present():
 
 def test_frontend_contracts():
     """Скрипты расположены в head, defer сохранён, raw innerHTML и inline handlers отсутствуют."""
-    base = (ROOT / "src/web/templates/base.html").read_text(encoding="utf-8")
+    base = (ROOT / "templates/base.html").read_text(encoding="utf-8")
     assert base.index('rel="stylesheet"') < base.index("<script") < base.index("</head>")
-    for path in (ROOT / "src/web/templates").rglob("*.html"):
+    for path in (ROOT / "templates").rglob("*.html"):
         content = path.read_text(encoding="utf-8")
         assert not re.search(r"\son\w+\s*=", content, re.I), path
         assert "<style" not in content, path
         for script in re.findall(r"<script\b[^>]*>", content):
             assert "defer" in script and "src=" in script, path
-    for path in (ROOT / "src/web/static/js").rglob("*.js"):
+    for path in (ROOT / "static/js").rglob("*.js"):
         assert ".innerHTML" not in path.read_text(encoding="utf-8"), path
+
+
+def test_runtime_does_not_import_archived_packages():
+    """Рабочие модули не возвращаются к старым именам после переноса слоёв."""
+    obsolete = ("modules", "web", "legacy")
+    for path in (ROOT / "src").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = (
+                [item.name for item in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom)
+                else []
+            )
+            for name in names:
+                assert not name.startswith(obsolete), (path, name)

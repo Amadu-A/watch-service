@@ -5,8 +5,7 @@
 Конфигурация рассчитана на локальную разработку без приватного .env
 и на production с обязательными внешними секретами.
 
-Не регистрирует прежние legacy приложения до переноса их моделей,
-миграций и контрактов.
+Регистрирует перенесённые приложения с совместимыми метками БД.
 """
 
 from __future__ import annotations
@@ -54,26 +53,30 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
-    "watch_app.apps.WatchAppConfig",
+    "accounts_app.apps.AccountsAppConfig",
+    "persistence_app.apps.PersistenceAppConfig",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "interface.middleware.RequestIdMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
+AUTH_USER_MODEL = "accounts.User"
 
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [
-            BASE_DIR / "src" / "templates" / "watch_app",
+            BASE_DIR / "templates",
         ],
         "APP_DIRS": True,
         "OPTIONS": {
@@ -133,7 +136,7 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 STATICFILES_DIRS = [
-    BASE_DIR / "src" / "static" / "static",
+    BASE_DIR / "static",
 ]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -159,4 +162,24 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_SCHEMA_CLASS": ("drf_spectacular.openapi.AutoSchema"),
+    "EXCEPTION_HANDLER": "interface.errors.exception_handler",
+}
+
+LOGIN_URL = "/login/"
+LOGIN_REDIRECT_URL = "/monitoring/"
+LOGOUT_REDIRECT_URL = "/login/"
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Warehouse Perimeter Watch",
+    "VERSION": "1.0.0",
+    "DESCRIPTION": "Защищённый API видеоконтроля склада.",
+    "SERVE_INCLUDE_SCHEMA": False,
+}
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"json": {"()": "core.logging.JsonFormatter"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
+    "root": {"handlers": ["console"], "level": runtime.log_level},
+    "loggers": {"httpx": {"level": "WARNING"}, "httpcore": {"level": "WARNING"}},
 }

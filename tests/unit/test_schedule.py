@@ -5,8 +5,8 @@ from datetime import datetime
 
 import pytest
 
-from core.domain import BusinessError
-from modules.surveillance.domain.schedule import SchedulePolicy, validate_schedule
+from domain.common import BusinessError
+from domain.surveillance.schedule import SchedulePolicy, validate_schedule
 
 
 @pytest.mark.parametrize(

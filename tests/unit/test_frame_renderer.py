@@ -6,7 +6,7 @@ import io
 import numpy as np
 from PIL import Image
 
-from modules.surveillance.infrastructure.vision import OpenCVFrameRenderer
+from infrastructure.vision import OpenCVFrameRenderer
 
 
 def test_frame_renderer_preserves_original_and_draws_normalized_geometry():

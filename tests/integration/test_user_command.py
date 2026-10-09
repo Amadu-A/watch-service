@@ -15,7 +15,7 @@ def test_create_operator_and_reject_existing(monkeypatch, django_user_model):
     """Новый оператор получает нужную роль; повтор команды не меняет его пароль/права."""
     password = "safe-test-only-password-93812"
     prompt = Mock(side_effect=[password, password])
-    monkeypatch.setattr("modules.accounts.management.commands.create_watch_user.getpass", prompt)
+    monkeypatch.setattr("accounts_app.management.commands.create_watch_user.getpass", prompt)
     output = StringIO()
     call_command("create_watch_user", "night-operator", "OPERATOR", stdout=output)
     user = django_user_model.objects.get(username="night-operator")
@@ -29,7 +29,7 @@ def test_create_operator_and_reject_existing(monkeypatch, django_user_model):
 def test_weak_password_does_not_create_user(monkeypatch, django_user_model):
     """Password validators действуют также для CLI создания ролей."""
     monkeypatch.setattr(
-        "modules.accounts.management.commands.create_watch_user.getpass",
+        "accounts_app.management.commands.create_watch_user.getpass",
         Mock(side_effect=["123", "123"]),
     )
     with pytest.raises(CommandError):

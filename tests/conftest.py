@@ -2,12 +2,11 @@
 """
 Общие фикстуры автоматических тестов Warehouse Perimeter Watch.
 
-Bootstrap-тесты выполняются без импортов ещё не перенесённого
-legacy-кода. Для существующих unit, integration, architecture
+Bootstrap-тесты выполняются без подключения к внешним сервисам.
+Для существующих unit, integration, architecture
 и E2E тестов сохраняются прежние fixtures и их поведение.
 
-После переноса composition root импорты будут приведены
-к утверждённой структуре проекта.
+Фикстуры используют единый composition root из новой структуры.
 """
 
 from __future__ import annotations
@@ -61,7 +60,7 @@ def isolated_dependencies(
     """
     Изолирует инфраструктуру каждого теста.
 
-    Корневые bootstrap-тесты не зависят от legacy composition root.
+    Корневые bootstrap-тесты не создают адаптеры.
     В остальных тестах сохраняются исторические подмены Redis,
     RTSP probe, media storage и process configuration.
     """
@@ -69,8 +68,6 @@ def isolated_dependencies(
         yield FakeFrameCache()
         return
 
-    # Временный импорт до переноса legacy/src/core/container.py.
-    # Это НЕ создание новой реализации и НЕ фиктивный core-модуль.
     from core import container as c
 
     c.configuration.cache_clear()
@@ -93,8 +90,7 @@ def admin(db, django_user_model):
     """
     Создаёт администратора для тестирования API.
 
-    Зависит от custom user model, которая будет перенесена
-    из legacy на этапе миграции accounts.
+    Использует перенесённую custom user model с меткой accounts.
     """
     return django_user_model.objects.create_user(
         username="admin",

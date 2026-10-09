@@ -4,7 +4,7 @@
 import io
 import tarfile
 
-from core.source_archive import source_bytes
+from infrastructure.source_archive import source_bytes
 
 
 def test_source_archive_uses_allowlist(tmp_path):

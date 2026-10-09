@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from core.domain import BusinessError
-from modules.surveillance.domain.geometry import GuardLine, LineCrossingPolicy, Point, TrackState
+from domain.common import BusinessError
+from domain.surveillance.geometry import GuardLine, LineCrossingPolicy, Point, TrackState
 
 
 def run_path(path, *, direction="BOTH", confidence=0.9, min_age=3):

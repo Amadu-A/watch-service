@@ -1,0 +1,12 @@
+/* static/css/blocks/table.css: History tables, delivery badges и pagination. */
+.table__scroll { overflow:auto; }.table { width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap; }
+.table th { color:#ccd7e7; background:#1a2634; padding:12px; font-weight:500; text-align:left; }
+.table td { padding:10px 12px; border-bottom:1px solid var(--border); }.table tbody tr:hover { background:#1b2d45; }
+.table__empty { color:var(--muted); padding:34px !important; text-align:center; }
+.table__photo { width:54px; height:36px; object-fit:cover; border-radius:4px; }
+.table__direction { color:var(--red); }.table__direction--exit { color:#5b9fff; }
+.table__actions { display:flex; gap:7px; }.badge { display:inline-block; padding:5px 7px; border:1px solid #344758; background:#1e2e3b; color:#aab8ca; border-radius:5px; margin:2px; font-size:11px; }
+.badge--sent { background:#153b2e; color:#80e5b0; border-color:#235a42; }.badge--failed { background:#3b222b; color:#ff7c8b; border-color:#723a48; }
+.pagination { display:flex; justify-content:center; gap:20px; align-items:center; padding-top:14px; }
+.delivery { display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.delivery__attempts { width:100%; color:var(--muted); font-size:12px; line-height:1.8; }

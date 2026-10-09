@@ -47,7 +47,7 @@ def page(live_server, admin, camera):
         image.getvalue(),
     )
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, channel="chromium")
         context = browser.new_context(
             viewport={"width": 1536, "height": 1024}, locale="ru-RU", timezone_id="Europe/Moscow"
         )

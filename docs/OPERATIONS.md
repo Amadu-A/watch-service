@@ -6,46 +6,24 @@
 Для PowerShell команда имеет вид `& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh <операция>`.
 Прямые команды migration, Docker networks или pytest вручную не требуются.
 
-## Рабочая станция: проверка, коммит, два remote
+## Рабочая станция: проверка, коммит и push
 
-Нужны Git Bash, `uv`, Node.js. Python 3.12 скачивает `uv`; YOLO/PyTorch для тестов не нужны.
-Сначала Chromium, затем качество. Коммит и push запускает пользователь:
+Нужны Git Bash, `uv`, Node.js. Первый запуск скачивает Python 3.12 и Chromium.
+Коммит и push выполняет только владелец репозитория `Amadu-A/watch-service`.
 
-```powershell
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh browsers
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh local-check
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh commit "feat: warehouse perimeter watch"
-# Один раз: подставить реальный URL публичного Warehouse Perimeter Watch:
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh public-remote "ПОДТВЕРЖДЁННЫЙ_URL_ПУБЛИЧНОГО_WAREHOUSE_REPOSITORY"
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh push
-```
+    & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh browsers
+    & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh local-check
+    git status --short
+    & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh commit "refactor: complete architecture migration"
+    & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh push
 
-Строку публичного URL нужно заменить на подтверждённый адрес нового проекта.
-Текущий `origin`: `git@github.com:neo-term-it/warehouse-perimeter-watch.git`.
-Скрипт `push` отправляет main в origin и public. Если public отсутствует, push прекращается
-до отправки и сообщает, какой remote требуется. Добавлять существующий public повторно не нужно.
-Скрипт `commit` сначала проводит все quality checks, затем добавляет только публичные project paths.
-
-## Запросы по серверу, отложенные до приёмки
-
-Пользователь сейчас не может предоставить вывод. При появлении доступа выполнить:
-
-```bash
-bash scripts/watch.sh discover
-bash scripts/watch.sh inspect-rabbit ИМЯ_SHARED_RABBITMQ_CONTAINER
-```
-
-`discover` показывает ОС, Docker/Compose versions, названия/images/status/ports контейнеров,
-Docker networks, listening ports, NVIDIA GPU (если доступен), память и свободное место.
-`inspect-rabbit` показывает только сети и aliases выбранного контейнера, без environment/password.
-Нужно сообщить: фактическое имя shared RabbitMQ, shared network, hostname/alias RabbitMQ,
-наличие NVIDIA/Toolkit, доступные GPU/RAM/disk, адрес/домен и способ HTTPS доступа к кабинету.
-Пароли, токены и полный `docker inspect`/`compose config` присылать не нужно.
-Также нужен подтверждённый URL публичного Warehouse Perimeter Watch.
+`local-check` проверяет Ruff, Django, отсутствие новых миграций, Node, Python
+и Chromium E2E. `commit` повторно выполняет проверки и добавляет только
+явно перечисленные project paths. `push` отправляет только `origin main`.
 
 ## Первое развёртывание
 
-Checkout приватного проекта должен уже существовать и иметь чистый main.
+Checkout публичного проекта должен уже существовать и иметь чистый main.
 На Linux нужны Docker Engine/Compose plugin, `uv` и доступ к shared RabbitMQ.
 Production vision требует NVIDIA Container Toolkit; host не устанавливает YOLO.
 
@@ -103,7 +81,7 @@ Weights и `.env` исключены из Git и build context; models подк�
 Static assets и архив исходников собираются внутри Docker build. Тесты не очищают production DB/media.
 Ошибка проверок до migration останавливает deployment. Shared сервисы и чужие volumes не удаляются.
 
-Web слушает `127.0.0.1:8080` по умолчанию: нужен HTTPS reverse proxy.
+Web слушает `127.0.0.1:8086` по умолчанию: нужен HTTPS reverse proxy.
 Для теста без HTTPS явно используйте `APP_ENV=development`, `DJANGO_SECURE_COOKIES=false`,
 `VISION_DEVICE=cpu` и запускайте `bash scripts/watch.sh deploy` без GPU overlay.
 Для доступа с другого компьютера настройте proxy либо согласованный `WEB_BIND_IP` и firewall.

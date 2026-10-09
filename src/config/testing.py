@@ -2,8 +2,8 @@
 """
 Изолированная конфигурация автоматических тестов.
 
-Выполняет тесты с SQLite без обязательной production базы,
-не допуская внешних уведомлений или записи в реальные сервисы.
+Использует SQLite локально и отдельный PostgreSQL в контейнерных тестах,
+не допуская внешних уведомлений или записи в рабочие сервисы.
 
 Значения устанавливаются до импорта основных Django settings.
 """
@@ -14,7 +14,7 @@ import os
 from importlib import import_module
 
 os.environ["APP_ENV"] = "testing"
-os.environ["DATABASE_ENGINE"] = "sqlite"
+os.environ.setdefault("DATABASE_ENGINE", "sqlite")
 os.environ["DJANGO_DEBUG"] = "false"
 os.environ["DJANGO_ALLOWED_HOSTS"] = "localhost,127.0.0.1,testserver"
 
@@ -32,3 +32,9 @@ for _name in dir(_base_settings):
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",
 ]
+
+DATABASES = _base_settings.DATABASES
+WHITENOISE_USE_FINDERS = True
+WHITENOISE_AUTOREFRESH = True
+if DATABASES["default"]["ENGINE"].endswith("sqlite3"):
+    DATABASES["default"]["OPTIONS"] = {"cached_statements": 0}

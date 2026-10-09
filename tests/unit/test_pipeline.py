@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from modules.surveillance.application.pipeline import CameraPipeline
-from modules.surveillance.domain.geometry import LineCrossingPolicy
+from application.surveillance.pipeline import CameraPipeline
+from domain.surveillance.geometry import LineCrossingPolicy
 
 
 def pipeline(*, enabled=True, create=None):

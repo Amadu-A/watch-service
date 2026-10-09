@@ -1,112 +1,64 @@
-<!-- docs/VALIDATION.md: Проверенный результат, серверные вопросы и ручная приёмка текущего этапа. -->
-# Проверка текущего этапа
+<!-- docs/VALIDATION.md: Локальные проверки миграции и ручная приёмка. -->
+# Проверка миграции
 
-Реализован новый Warehouse Perimeter Watch по приложенному ТЗ.
-Ветку main и remotes агент не изменял; коммит и push не выполнялись.
-В исходной рабочей папке был только `.git`, поэтому существующего application кода для сравнения не было.
-Текущий private origin относится к Warehouse Perimeter Watch. Публичный remote ещё нужно подтвердить.
+На 08.10.2026 исходный код перенесён из `legacy/` в Django-приложения,
+domain, application, repositories, infrastructure, interface и workers.
+Шаблоны и статика находятся в корне. Исходный архив включает AGPL,
+frontend и необходимые файлы сборки. Не было коммита, push или запуска
+команд на сервере.
 
 ## Автоматические проверки
 
-Локальный baseline: Windows, Python 3.12.13, Django 5.2.18, Chromium Playwright 1.63.
-Итоговый запуск выполняется через `watch.sh local-check`:
+Локально проверены Python 3.12, Django 5.2, Ruff, `manage.py check`,
+`makemigrations --check --dry-run`, Node tests и Chromium E2E.
+Полный локальный запуск: 101 Python-тест пройден, 3 внешних теста пропущены;
+в число пройденных входят 5 Chromium E2E. Три Node-теста пройдены.
+Покрытие Python с ветвлениями — 80%. Пропущенные проверки реальных
+PostgreSQL, Redis и общего RabbitMQ запускаются только контейнерной командой.
+Локальный Docker daemon недоступен, поэтому образы и server runtime
+здесь не подтверждены. Подготовлен workflow .github/workflows/checks.yaml;
+его выполнение в GitHub зависит от push пользователя.
 
-Результат 07.10.2026: Ruff check/format, Django check и отсутствие migration drift — успешно;
-83 Python теста основной группы и 5 Chromium E2E — успешно; 3 Node теста — успешно.
-3 внешних integration теста пропущены до серверного запуска. Общее покрытие statements/branches
-основной Python группы — 77%; E2E запускается отдельно от измерения coverage.
+## После push: сервер
 
-- Unit/domain: направления, отрезок, jitter, остановка, confidence, возраст, обратный проход.
-  Проверяется также настоящее пересечение после отменённого первого candidate.
-- Расписание: ночные интервалы, weekend, timezone, точные границы и повторный час DST.
-- Пайплайн: лучшие evidence, неизменный timestamp события, isolated state, track TTL, bounded pending.
-- Vision adapters: одна загрузка модели на несколько inference вызовов, person output, ByteTrack mapping,
-  сохранение counter, reconnect и очередь последнего кадра, реальные JPEG и отрисовка линии/bbox.
-- Application/DB: компенсация storage/DB failures, idempotency, event/outbox transaction,
-  broker failure, recovery QUEUED, retry/backoff/DEAD, per-channel hard flags.
-- Email/Telegram: вложения, TLS certificate verification, finite timeout и отказ Bot API;
-  все сетевые sender clients в этих тестах подменены, внешние сообщения не отправлялись.
-- API: роли, CSRF, authentication, UUID/errors, filters/pagination, защищённые кадры/media,
-  stale LIVE, PDF/CSV, report ownership, recipient CRUD, retention и исходный архив без secrets.
-- Архитектура: слои/imports, отсутствие ORM в transport/application/domain,
-  class-based endpoints, injected worker adapters, docstrings на русском, head/defer и безопасный DOM.
-- Frontend Node: сетка, reorder, нормализация координат.
-- Chromium E2E: camera create/line/probe, dashboard select/remove/reorder/grid/fullscreen,
-  recipients/gates, overnight schedule/retention, CSV, violation detail/JPEG/PDF, logout.
-  Первый рендер даты проверяется отдельно для timezone объекта, отличного от browser timezone.
+Из `/home/main/projects/watch-service` выполнить `git pull --ff-only origin main`.
+Если `.env` ещё не создан, выполнить `bash scripts/watch.sh init` и заполнить
+секреты, адреса камер, host/CSRF и параметры vision. Для production задать
+`APP_ENV=production` и `DJANGO_SECURE_COOKIES=true`.
+Не отправлять `.env` в Git. Для общего RabbitMQ использовать только
+проектный vhost/user в существующей сети `ai-shared`.
 
-Конфигурации CPU/GPU Compose и синтаксис `watch.sh` проверены отдельно.
-Рабочий Docker daemon локально отсутствует: Linux engine pipe не найден.
-Сборка/запуск Docker images здесь не подтверждены. Три проверки внешних services
-(PostgreSQL/Redis, RabbitMQ и concurrent PostgreSQL delivery lock) запускаются только
-через `watch.sh test-containers`/`deploy` на сервере и локально пропускаются.
-YOLO model internals, настоящие RTSP/GPU и фактические Email/Telegram delivery требуют серверной приёмки.
+    WATCH_GPU=true bash scripts/watch.sh test-containers
+    WATCH_GPU=true bash scripts/watch.sh deploy
+    bash scripts/watch.sh status
 
-## Команды пользователя
+При CPU development вместо `WATCH_GPU=true` запустить команды без префикса
+и установить `VISION_DEVICE=cpu`. `deploy` повторяет контейнерные тесты,
+затем применяет миграции и пересоздаёт только процессы этого проекта.
 
-```powershell
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh browsers
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh local-check
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh commit "feat: warehouse perimeter watch"
-# Задать подтверждённый public remote перед первым push:
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh public-remote "ПОДТВЕРЖДЁННЫЙ_URL"
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh push
-```
+## Ручная приёмка
 
-Для сервера последовательность первичной подготовки приведена в [OPERATIONS.md](OPERATIONS.md).
-После настройки `.env`, shared RabbitMQ и weights:
+1. Открыть `/login/` и войти администратором. Проверить тёмный кабинет,
+   меню, карточки камер, правую панель, таблицу нарушений и сетку по
+   `renders/img.png`. Неавторизованный пользователь не видит media/stream.
+2. Добавить две реальные камеры, проверить RTSP, сохранить линию,
+   обновить страницу и убедиться, что она осталась. Реквизиты камеры
+   никогда не появляются в UI/API.
+3. В мониторинге добавить и переставить камеры, изменить сетку и
+   развернуть одну карточку. После перезагрузки выбор и порядок сохраняются.
+   Отключение одной камеры делает её offline, вторая продолжает работать.
+4. Задать активное расписание. Провести человека через линию: появляется
+   одно нарушение с верным направлением, временем, камерой и оригинальным/
+   размеченным JPEG. Колебание около линии, проход вне отрезка и времени
+   не создают ложных событий.
+5. Открыть нарушение, скачать PDF, проверить кириллицу и фото.
+   Проверить фильтры истории, PDF/CSV периода, историю отчётов и статистику.
+6. При выключенном `NOTIFICATIONS_ENABLED` включить переключатели UI:
+   внешняя отправка остаётся запрещена. После явного включения флагов
+   для своих адресатов проверить Email/Telegram, состояния SENT/FAILED,
+   историю попыток и ручной retry.
+7. Проверить роли оператора/наблюдателя, logout, сохранение раскладки,
+   удержание media, логи vision/worker и загрузку GPU.
 
-```bash
-bash scripts/watch.sh discover
-bash scripts/watch.sh inspect-rabbit ИМЯ_SHARED_RABBITMQ_CONTAINER
-# Pull, сборка, контейнерные тесты, migration и запуск:
-WATCH_GPU=true bash scripts/watch.sh deploy
-bash scripts/watch.sh status
-```
-
-В development/CPU режиме применяется `bash scripts/watch.sh deploy` без GPU overlay.
-Все команды уже упакованы в один `.sh`, отдельного набора ручных migration/network/test команд нет.
-
-## Ручная приёмка на сервере
-
-1. Открыть настроенный адрес `/login/`, войти администратором. Убедиться, что стили,
-   меню и разделы загружаются, а без входа media/streams недоступны.
-2. В «Камеры» импортировать/добавить минимум две реальные камеры. Проверить RTSP,
-   получить snapshot, задать две точки линии. Перезагрузить страницу: линия должна сохраниться.
-   Пароль и старый логин не должны отображаться; смена реквизитов должна работать.
-3. В «Мониторинг» добавить обе камеры, изменить сетку, порядок и полный экран,
-   убрать/добавить камеру. После reload сохраняются порядок и выбор текущего пользователя.
-   Доступный поток показывает LIVE, bbox/person/confidence, линию и время объекта.
-4. Отключить одну камеру/RTSP. Она должна показать offline; вторая продолжает обновляться.
-   Восстановить RTSP: reconnect возвращает live без перезапуска web. В logs нет пароля/полного URL.
-5. Включить контроль и активный интервал текущего дня. Провести человека через отрезок
-   в разрешённом направлении: возникает одно нарушение. Остановка или колебание около линии
-   не создаёт серию событий. Обратный законный проход создаёт отдельное событие при BOTH.
-   Проход за пределами отрезка и вне расписания не создаёт нарушения.
-6. Открыть нарушение: совпадают камера, направление и момент события; есть оригинальное
-   и размеченное фото. Скачать PDF: кириллица читается, фото встроено. Изменить название/линию
-   камеры: старое событие должно показывать прежние snapshots. При включённом clip проверить MP4.
-7. В «Нарушения» проверить фильтры/страницы; в «Отчёты» сформировать PDF и CSV периода,
-   скачать их из истории. В «Статистика» проверить today/7d/30d и свой диапазон.
-8. При runtime flags=false включить business switches: тестовая отправка остаётся disabled,
-   API отвечает notifications_disabled; события сохраняются. Добавить, изменить и удалить recipient.
-   Для проверки внешних каналов включить реальные server/channel flags для своих адресатов,
-   пересоздать процессы и проверить тестовую отправку, JPEG/PDF, SENT и attempts.
-9. Проверить FAILED при тестовом отказе провайдера, bounded retry/DEAD и ручной retry.
-   Неуспешное Email не должно отменять успешное Telegram. Успешная delivery не отправляется повторно.
-10. Создать operator/viewer через `watch.sh user`: viewer читает и меняет свою раскладку,
-    operator повторяет неуспешные deliveries; изменение cameras/recipients/schedule/settings
-    доступно только администратору. Выйти: кабинет снова требует login.
-11. Установить retention 1–30 дней. Значение 31 отклоняется. На специально подготовленных
-    тестовых старых событиях выполнить `watch.sh retention`: просроченные metadata/files удаляются,
-    свежие сохраняются. Проверить scheduler heartbeat/logs, disk и реальную GPU нагрузку.
-
-## Данные, которые нужны при появлении доступа
-
-Вывод `discover` и `inspect-rabbit`, имя shared контейнера, network и DNS alias,
-NVIDIA/Toolkit и выделяемые ресурсы, домен/HTTPS/proxy, число камер и их разрешения/FPS.
-Для публичного зеркала нужен подтверждённый Warehouse Perimeter Watch URL.
-Секреты и записи камер отправлять в отчёт не требуется.
-
-До этой приёмки результат считается реализованным и локально проверенным кодом,
-а не подтверждённой работающей системой на складском объекте.
+Ни один пункт с реальными RTSP, GPU, PostgreSQL и внешними каналами
+не считается подтверждённым до выполнения на сервере.

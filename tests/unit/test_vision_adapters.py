@@ -6,7 +6,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from modules.surveillance.infrastructure.vision import (
+from infrastructure.vision import (
     ByteTrackTracker,
     UltralyticsPersonDetector,
     connection_url,

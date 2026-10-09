@@ -1,5 +1,0 @@
-<!-- src/web/static/images/shield.svg: Знак видеоконтроля без внешних шрифтов и ресурсов. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 44" fill="none">
-  <path d="M20 3 34 9v12c0 10-7 16-14 20C13 37 6 31 6 21V9L20 3Z" stroke="#397cff" stroke-width="3"/>
-  <path d="M20 12v10h7l-8 10v-9h-6l7-11Z" fill="#397cff"/>
-</svg>

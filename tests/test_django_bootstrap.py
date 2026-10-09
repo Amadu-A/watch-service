@@ -5,7 +5,7 @@
 Проверяют настройки, CBV, доступность templates/static,
 отсутствие внешних отправок и плоский settings.py.
 
-Не используют legacy composition root, production PostgreSQL,
+Не используют production PostgreSQL,
 Redis, RabbitMQ или реальную камеру.
 """
 
@@ -20,7 +20,7 @@ from django.template.loader import get_template
 from django.test import Client
 from django.urls import resolve
 
-from watch_app.views import LivenessView
+from interface.pages import LivenessView
 
 
 def test_django_uses_project_settings() -> None:
@@ -38,9 +38,14 @@ def test_settings_remain_single_python_module() -> None:
 
 
 def test_testing_database_is_isolated() -> None:
-    """Не допускает использование production PostgreSQL в bootstrap-тестах."""
+    """Проверяет, что тесты используют SQLite либо отдельную контейнерную PostgreSQL."""
     assert settings.APP_ENV == "testing"
-    assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
+    database = settings.DATABASES["default"]
+    if database["ENGINE"] == "django.db.backends.postgresql":
+        assert str(database["NAME"]).startswith("test_warehouse_tests")
+        assert database["HOST"] == "test-postgres"
+    else:
+        assert database["ENGINE"] == "django.db.backends.sqlite3"
 
 
 def test_notifications_are_disabled() -> None:

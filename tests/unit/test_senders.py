@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from core.config import Settings
-from modules.notifications.infrastructure.senders import SMTPEmailSender, TelegramBotSender
+from infrastructure.messaging.senders import SMTPEmailSender, TelegramBotSender
 
 
 def test_email_tls_auth_and_evidence_attachments(monkeypatch):

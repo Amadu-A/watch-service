@@ -14,7 +14,7 @@
    gridColumns,
    normalizedPoint,
    reorder,
- } from '../../src/static/static/js/features/layout-state.js';
+ } from '../../static/js/features/layout-state.js';
 
  test('Сетка автоматически растёт после четырёх камер', () => {
    assert.equal(gridColumns(1), 1);

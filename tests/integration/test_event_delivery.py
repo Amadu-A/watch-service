@@ -12,9 +12,9 @@ from django.utils import timezone
 from PIL import Image
 
 from core import container as c
-from core.domain import Actor, BusinessError
-from modules.notifications.infrastructure.outbox import CeleryOutboxPublisher
-from modules.persistence.models import (
+from domain.common import Actor, BusinessError
+from infrastructure.messaging.outbox import CeleryOutboxPublisher
+from persistence_app.models import (
     NotificationDelivery,
     NotificationOutbox,
     NotificationRecipient,

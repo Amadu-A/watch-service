@@ -1,0 +1,19 @@
+<!-- templates/pages/monitoring.html: Основной dashboard по согласованному рендеру, с живыми данными. -->
+{% extends 'base.html' %}{% load static %}
+{% block scripts %}<script type="module" src="{% static 'js/features/monitoring.js' %}" defer></script><script type="module" src="{% static 'js/features/violations.js' %}" defer></script><script type="module" src="{% static 'js/features/notifications.js' %}" defer></script><script type="module" src="{% static 'js/features/schedule.js' %}" defer></script>{% endblock %}
+{% block content %}
+<div class="dashboard">
+  <div class="dashboard__main">
+    <section class="panel"><div class="panel__heading"><h1 class="panel__title">Онлайн-наблюдение</h1><div class="form__actions"><label class="form__inline">Сетка<select data-grid><option value="auto">Авто</option><option value="1">1 столбец</option><option value="2">2 столбца</option><option value="3">3 столбца</option><option value="4">4 столбца</option></select></label><span class="panel__hint" data-camera-count>0 камер</span><button class="button button--icon" type="button" data-grid-fullscreen aria-label="Развернуть наблюдение">⛶</button></div></div>
+      <div class="camera-grid" data-camera-grid><p class="empty">Добавьте зарегистрированную камеру в наблюдение.</p></div>
+    </section>
+    <section class="panel"><div class="panel__heading"><h2 class="panel__title">Последние нарушения</h2><a href="/violations/">Все нарушения →</a></div>{% include 'components/violation-table.html' %}</section>
+  </div>
+  <aside class="dashboard__sidebar" aria-label="Управление наблюдением">
+    <section class="panel"><h2 class="panel__title">Управление камерами</h2><form class="form__actions" data-add-camera-form><label class="form__grow"><span class="visually-hidden">Доступные камеры</span><select name="camera_id" data-camera-selector><option value="">Добавить камеру…</option></select></label><button class="button button--primary" type="submit">＋ Добавить</button></form><h3 class="panel__subtitle">Выбранные камеры</h3><ol class="camera-list" data-selected-cameras></ol><p class="panel__hint">Перетащите камеры, чтобы изменить порядок. Новые подключения добавляются в <a href="/cameras/">разделе «Камеры»</a>.</p></section>
+    {% include 'components/notifications.html' %}
+    {% include 'components/schedule.html' %}
+    <section class="panel"><div class="panel__heading"><h2 class="panel__title">Статистика</h2><label><span class="visually-hidden">Период статистики</span><select data-statistics-period><option value="7d">Последние 7 дней</option><option value="today">Сегодня</option><option value="30d">Последние 30 дней</option><option value="custom">Свой период</option></select></label></div><form class="form" data-statistics-custom hidden><label class="form__field">С<input type="datetime-local" name="date_from" required></label><label class="form__field">До<input type="datetime-local" name="date_to" required></label><button class="button" type="submit">Применить</button></form><div class="statistics" data-statistics></div></section>
+  </aside>
+</div>
+{% endblock %}

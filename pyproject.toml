@@ -4,9 +4,9 @@
 name = "warehouse-perimeter-watch"
 version = "0.1.0"
 description = "Видеоконтроль пересечения периметра склада"
-requires-python = ">=3.14"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-  "django>=6.1.2", "djangorestframework>=3.16,<3.17",
+  "django>=5.2,<5.3", "djangorestframework>=3.16,<3.17",
   "drf-spectacular>=0.28,<0.30", "pydantic-settings>=2.9,<3",
   "psycopg[binary]>=3.2,<4", "redis>=6,<8", "celery>=5.5,<5.7",
   "cryptography>=45,<48", "httpx>=0.28,<0.29", "Pillow>=11,<13",

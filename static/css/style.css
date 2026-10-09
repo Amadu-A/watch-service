@@ -1,0 +1,8 @@
+/* static/css/style.css: Единая точка подключения reusable CSS blocks. */
+@import url('./variables.css');
+@import url('./global.css');
+@import url('./blocks/layout.css');
+@import url('./blocks/forms.css');
+@import url('./blocks/cameras.css');
+@import url('./blocks/table.css');
+@import url('./responsive.css');

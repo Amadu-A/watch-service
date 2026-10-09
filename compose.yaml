@@ -19,6 +19,7 @@ x-app: &app
     PYTHONPATH: /app/src
     MEDIA_ROOT: /app/media
     POSTGRES_HOST: postgres
+    DATABASE_ENGINE: postgresql
   volumes:
     - media:/app/media
   networks: [private]
@@ -59,7 +60,7 @@ services:
       retries: 20
   web:
     <<: *app
-    ports: ['${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-8080}:8000']
+    ports: ['${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-8086}:8000']
     healthcheck:
       test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://localhost:8000/health/ready", timeout=5)']
       interval: 15s
