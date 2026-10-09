@@ -34,9 +34,10 @@ flowchart LR
 media работают в приватной сети. Только `notification-worker`, `scheduler` и
 тестовый сервис подключаются к внешней сети `ai-shared`; общий RabbitMQ не входит
 в Compose проекта. Профиль `gpu` запускает `vision` с NVIDIA GPU, профиль `cpu` —
-`vision-cpu`. Скрипт выбирает профиль по `VISION_DEVICE`. Профиль `tests` использует
+`vision-cpu`. При включённом vision скрипт выбирает профиль по `VISION_DEVICE`; по умолчанию
+vision выключен. Профиль `tests` использует
 отдельные временные PostgreSQL и Redis. Один `Dockerfile` содержит стадии
-`source`, `base`, `vision`, `testing`.
+`source`, `base`, `ops`, `vision`, `testing`.
 
 В коде `interface` и `workers` вызывают операции `application`; правила лежат в
 `domain`. `application` обращается к портам, а `repositories` и `infrastructure`
@@ -46,9 +47,9 @@ media работают в приватной сети. Только `notificatio
 ## Структура репозитория
 
 ```text
-Dockerfile                 стадии source/base/vision/testing
-compose.yaml               рабочие сервисы и профили gpu/cpu/tests
-.env.example               безопасные значения по умолчанию
+Dockerfile                 стадии source/base/ops/vision/testing
+compose.yaml               рабочие сервисы и профили gpu/cpu/tests/ops
+.env.example               шаблон короткого приватного файла
 scripts/watch.sh           проверки, развёртывание и операции
 src/config/                настройки и маршруты Django
 src/core/                  конфигурация, сборка зависимостей, запуск
@@ -71,88 +72,48 @@ docs/                     архитектура, эксплуатация и п
 
 ## Что записать в `.env` на сервере
 
-Сначала установите [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
-на сервере и убедитесь, что `uv --version` работает в текущем shell:
+На сервере нужны Docker Engine и Compose plugin. `uv` уже находится внутри образов:
+он устанавливает зависимости при сборке. Команды `init`, `rabbit`, `model`,
+`preflight`, `test-containers` и `deploy` не требуют `uv` или Python на хосте.
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-uv --version
-```
-
-Из корня проекта выполните `bash scripts/watch.sh init`. Команда создаст `.env`
-с четырьмя уникальными значениями: `DJANGO_SECRET_KEY`, `CAMERA_CREDENTIALS_KEY`,
-`POSTGRES_PASSWORD`, `RABBITMQ_PASSWORD`. **Сохраните их без изменений и не
-публикуйте `.env` в Git.** Если файл уже есть, `init` его не перезаписывает.
-
-Ниже — строки, которые нужно **добавить в созданный `.env` или изменить в нём**
-для запуска на сервере с NVIDIA GPU и HTTPS reverse proxy. Замените все значения
-в угловых скобках реальными; это не готовые значения для запуска.
+Из корня проекта выполните `bash scripts/watch.sh init`. Служебный контейнер
+создаст `.env` с правами `600` и следующими строками:
 
 ```dotenv
 APP_ENV=production
-DJANGO_DEBUG=false
-DATABASE_ENGINE=postgresql
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,<ДОМЕН_ИЛИ_IP_ПРОКСИ>
-DJANGO_CSRF_TRUSTED_ORIGINS=https://<ДОМЕН_ИЛИ_IP_ПРОКСИ>
-DJANGO_SECURE_COOKIES=true
-WEB_BIND_IP=127.0.0.1
-WEB_PORT=8086
-
-SHARED_NETWORK=ai-shared
-RABBITMQ_HOST=rabbitmq
-RABBITMQ_PORT=5672
-RABBITMQ_VHOST=warehouse-watch
-RABBITMQ_USER=warehouse-watch
-
-VISION_ENABLED=true
-VISION_DEVICE=0
-VISION_GPU_ID=0
-VISION_MODEL=models/yolo11n.pt
-DEFAULT_TIMEZONE=Europe/Moscow
-MEDIA_RETENTION_DAYS=30
-
-CAMERA_INDICES=1,2
-CAMERA_1_NAME=Главный вход
-CAMERA_1_IP=<IP_ПЕРВОЙ_КАМЕРЫ>
-CAMERA_1_PORT=554
-CAMERA_1_PATH=<RTSP_ПУТЬ_ПЕРВОЙ_КАМЕРЫ>
-CAMERA_1_USERNAME=<ЛОГИН_ПЕРВОЙ_КАМЕРЫ>
-CAMERA_1_PASSWORD=<ПАРОЛЬ_ПЕРВОЙ_КАМЕРЫ>
-CAMERA_2_NAME=Боковой вход
-CAMERA_2_IP=<IP_ВТОРОЙ_КАМЕРЫ>
-CAMERA_2_PORT=554
-CAMERA_2_PATH=<RTSP_ПУТЬ_ВТОРОЙ_КАМЕРЫ>
-CAMERA_2_USERNAME=<ЛОГИН_ВТОРОЙ_КАМЕРЫ>
-CAMERA_2_PASSWORD=<ПАРОЛЬ_ВТОРОЙ_КАМЕРЫ>
-
-NOTIFICATIONS_ENABLED=false
-EMAIL_NOTIFICATIONS_ENABLED=false
-TELEGRAM_NOTIFICATIONS_ENABLED=false
-EVENT_CLIP_ENABLED=false
+DJANGO_SECRET_KEY=<сгенерированное значение>
+CAMERA_CREDENTIALS_KEY=<сгенерированное значение>
+POSTGRES_PASSWORD=<сгенерированное значение>
+RABBITMQ_PASSWORD=<сгенерированное значение>
 ```
 
-`DATABASE_ENGINE=postgresql` и `DJANGO_DEBUG=false` нужны также командам
-`watch.sh rabbit` и `watch.sh model`: они читают `.env` до запуска контейнеров.
-`POSTGRES_DB=warehouse_watch`, `POSTGRES_USER=warehouse_watch`,
-`POSTGRES_HOST=postgres` и `REDIS_URL=redis://redis:6379/0` уже заданы в
-`.env.example`; Compose направляет приложение в собственные PostgreSQL/Redis.
-Значения `WEB_BIND_IP=127.0.0.1` и `WEB_PORT=8086` предполагают HTTPS proxy на
-этом же сервере. Укажите фактический домен proxy в обоих Django параметрах.
-Если камер пока нет, запишите `CAMERA_INDICES=` в `.env` и не вызывайте импорт:
-их можно будет добавить через кабинет после первого запуска. Адреса
-`192.0.2.*` в `.env.example` являются учебными и не подключаются.
+Сохраните эти четыре значения. Повторный `init` их не меняет. Не публикуйте
+`.env` в Git. Для **первого запуска без камер и GPU** других строк не требуется.
+По умолчанию Django работает с PostgreSQL, `DEBUG=false`, защищёнными cookies,
+`VISION_ENABLED=false`, внешние уведомления и клипы выключены. PostgreSQL,
+Redis, RabbitMQ и сеть имеют адреса из `src/core/config.py` и `compose.yaml`.
+Порт `127.0.0.1:8086` задаётся в Compose. Локальный HTTP доступен для
+`/health/live` и первичной проверки через Chrome/Firefox
+на `localhost`. Для штатного доступа настройте HTTPS reverse proxy: браузеры
+по-разному обрабатывают защищённые cookies на локальном HTTP.
 
-Для разработки без GPU используйте `APP_ENV=development`,
-`DJANGO_SECURE_COOKIES=false` и `VISION_DEVICE=cpu`; скрипт автоматически выберет
-профиль `cpu`. В production при включённом vision нужен GPU.
+Добавляйте в `.env` только значения, отличающиеся от этих настроек:
 
-Для реальной отправки уведомлений задайте `NOTIFICATIONS_ENABLED=true` и флаг
-нужного канала. Для почты заполните `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
-`SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`, `SMTP_USE_TLS`; для Telegram —
-`TELEGRAM_BOT_TOKEN`. Затем добавьте своих получателей и включите бизнес-переключатели
-в кабинете. Пока флаги равны `false`, внешней отправки нет независимо от UI.
-Остальные настройки и безопасные значения по умолчанию перечислены в `.env.example`.
+| Ситуация | Строки в `.env` |
+| --- | --- |
+| HTTPS proxy с доменом `watch.example.org` | `DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,watch.example.org` и `DJANGO_CSRF_TRUSTED_ORIGINS=https://watch.example.org` |
+| Другое имя общей сети или RabbitMQ | `SHARED_NETWORK=<фактическая сеть>`, `RABBITMQ_HOST=<имя контейнера или alias>` |
+| Другой адрес/порт публикации web | `WEB_BIND_IP=<IP>`, `WEB_PORT=<порт>` |
+| Запуск обработки видео на GPU | `VISION_ENABLED=true`, `VISION_DEVICE=0`; при выборе другой карты `VISION_GPU_ID=<номер>` |
+| Другая модель | `VISION_MODEL=models/<файл.pt>` и файл в `models/` |
+| Первичный импорт камер | `CAMERA_INDICES=1,2`, затем реальные `CAMERA_1_NAME/IP/PORT/PATH/USERNAME/PASSWORD` и `CAMERA_2_*` |
+| Реальные уведомления | `NOTIFICATIONS_ENABLED=true`, нужный флаг `EMAIL_NOTIFICATIONS_ENABLED` или `TELEGRAM_NOTIFICATIONS_ENABLED`; для Email — `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS` и при необходимости `SMTP_PORT`, `SMTP_USE_TLS`; для Telegram — `TELEGRAM_BOT_TOKEN` |
+
+Секреты камер при создании через кабинет пишутся в БД зашифрованно; строки
+`CAMERA_*` нужны только команде импорта. Пример `.env.example` служит
+шаблоном; реальные значения по умолчанию находятся в `Settings`.
+Срок хранения — 30 дней, часовой пояс — `Europe/Moscow`, максимум видимых
+камер — 16. Их можно изменить в настройках объекта, где это предусмотрено.
 
 ## Запуск и проверка
 
@@ -167,7 +128,6 @@ EVENT_CLIP_ENABLED=false
 
 ```bash
 bash scripts/watch.sh rabbit shared-rabbitmq-1
-bash scripts/watch.sh model
 bash scripts/watch.sh test-containers
 bash scripts/watch.sh deploy
 bash scripts/watch.sh status
@@ -175,7 +135,7 @@ bash scripts/watch.sh status
 
 `deploy` повторяет контейнерные тесты, применяет миграции и пересоздаёт только
 сервисы проекта. Перед первым запуском создайте администратора командой
-`bash scripts/watch.sh admin`, затем импортируйте настроенные камеры командой
+`bash scripts/watch.sh admin`, при необходимости импортируйте настроенные камеры командой
 `bash scripts/watch.sh import-cameras`. Полный порядок и ручная приёмка описаны в
 [эксплуатации](docs/OPERATIONS.md) и [проверках](docs/VALIDATION.md).
 

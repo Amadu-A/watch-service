@@ -12,14 +12,8 @@ x-app: &app
     context: .
     target: base
   env_file:
-    - path: .env.example
     - path: .env
       required: false
-  environment:
-    PYTHONPATH: /app/src
-    MEDIA_ROOT: /app/media
-    POSTGRES_HOST: postgres
-    DATABASE_ENGINE: postgresql
   volumes:
     - media:/app/media
   networks: [private]
@@ -46,12 +40,28 @@ x-vision: &vision
     start_period: 90s
 
 services:
+  ops:
+    build:
+      context: .
+      target: ops
+    profiles: [ops]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WATCH_OPERATIONS_ROOT: /workspace
+    volumes:
+      - .:/workspace
+    user: "${WATCH_UID:-1000}:${WATCH_GID:-1000}"
+    networks: [private]
+    restart: "no"
+    logging: *logging
   postgres:
     image: postgres:17.11-bookworm
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-warehouse_watch}
       POSTGRES_USER: ${POSTGRES_USER:-warehouse_watch}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
     volumes: [postgres-data:/var/lib/postgresql/data]
     networks: [private]
     restart: unless-stopped

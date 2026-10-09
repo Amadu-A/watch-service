@@ -6,6 +6,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from time import sleep
 from uuid import uuid4
 
 import pytest
@@ -66,8 +67,19 @@ def page(live_server, admin, camera):
     assert errors == []
 
 
+def slow_initial_request(page, path):
+    """Искусственно задерживает первый API-ответ для проверки раннего взаимодействия."""
+
+    def delay(route):
+        sleep(0.4)
+        route.continue_()
+
+    page.route(f"**{path}", delay, times=1)
+
+
 def test_camera_line_and_persistent_monitoring_layout(page, camera, live_server):
     """Регистрация, линия, RTSP probe, selection, порядок и сетка проходят через реальные формы."""
+    slow_initial_request(page, "/api/v1/cameras")
     page.goto(live_server.url + "/cameras/")
     form = page.locator("[data-camera-create]")
     form.locator('[name="name"]').fill("Боковой вход")
@@ -75,6 +87,7 @@ def test_camera_line_and_persistent_monitoring_layout(page, camera, live_server)
     form.get_by_role("button", name="Зарегистрировать камеру", exact=True).click()
     page.wait_for_url(re.compile(r"/cameras/[0-9a-f-]+/$"))
     line = page.locator("[data-line-form]")
+    expect(line.locator('button[type="submit"]')).to_be_enabled()
     for field, value in {
         "start_x": "0.2",
         "start_y": "0.5",
@@ -115,6 +128,7 @@ def test_camera_line_and_persistent_monitoring_layout(page, camera, live_server)
 
 def test_notification_recipients_and_hard_flag(page, live_server):
     """Получатель редактируется и удаляется; business switch не разблокирует тестовую отправку."""
+    slow_initial_request(page, "/api/v1/notification-settings")
     page.goto(live_server.url + "/notifications/")
     form = page.locator("[data-recipient-form]")
     form.locator('[name="target"]').fill("security@example.com")
@@ -137,6 +151,7 @@ def test_notification_recipients_and_hard_flag(page, live_server):
 
 def test_schedule_retention_report_and_logout(page, live_server):
     """Ночной интервал и retention переживают reload; CSV скачивается, logout закрывает кабинет."""
+    slow_initial_request(page, "/api/v1/control-schedule")
     page.goto(live_server.url + "/settings/")
     schedule = page.locator("[data-schedule-form]")
     page.locator("[data-interval-add]").click()

@@ -1,7 +1,7 @@
 // static/js/features/monitoring.js
 /** Dashboard camera selection, persistent ordering, fullscreen и фактическая статистика. */
 import { api } from '../api.js';
-import { el, formatDate, run, toast } from '../components/ui.js';
+import { activate, el, formatDate, run, toast } from '../components/ui.js';
 import { gridColumns, reorder } from './layout-state.js';
 
 let cameras = [], layout = { camera_ids: [], grid: 'auto' }, dragged;
@@ -85,10 +85,6 @@ async function loadStatistics(validate = false) {
 }
 
 if (grid) {
-  await run(async () => {
-    [cameras, layout] = await Promise.all([api('/api/v1/cameras'), api('/api/v1/users/me/monitoring-layout')]);
-    render(); await loadStatistics();
-  });
   document.querySelector('[data-add-camera-form]').addEventListener('submit', event => {
     event.preventDefault();
     run(async () => {
@@ -105,4 +101,9 @@ if (grid) {
     if (next.map(camera => camera.id + camera.status + camera.name).join() !== cameras.map(camera => camera.id + camera.status + camera.name).join()) { cameras = next; render(); }
     await loadStatistics();
   }), 10000);
+  await run(async () => {
+    [cameras, layout] = await Promise.all([api('/api/v1/cameras'), api('/api/v1/users/me/monitoring-layout')]);
+    render(); await loadStatistics();
+    activate(document.querySelector('[data-add-camera-form]'));
+  });
 }

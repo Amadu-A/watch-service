@@ -146,6 +146,7 @@ def test_errors_filters_and_schema(client_api):
     assert client_api.get("/api/v1/cameras/invalid-uuid").data["error"]["code"] == "not_found"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_camera_stale_frame_and_protected_stream(client_api, camera, isolated_dependencies):
     """Протухший frame не остаётся LIVE; stream и отключение камеры соблюдают серверный доступ."""
     Camera.objects.filter(pk=camera["id"]).update(status="ONLINE")

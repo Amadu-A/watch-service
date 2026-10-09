@@ -1,7 +1,7 @@
 // static/js/features/cameras.js
 /** RTSP camera CRUD, server-side test и доступный normalized line editor. */
 import { api } from '../api.js';
-import { el, run, toast } from '../components/ui.js';
+import { activate, el, run, toast } from '../components/ui.js';
 import { normalizedPoint } from './layout-state.js';
 
 const admin = document.body.dataset.canConfigure === 'true';
@@ -26,13 +26,15 @@ async function catalog() {
 }
 
 if (document.querySelector('[data-camera-catalog]')) {
-  await run(catalog);
   document.querySelector('[data-camera-create]')?.addEventListener('submit', event => {
     event.preventDefault(); run(async () => {
       const camera = await api('/api/v1/cameras', { method: 'POST', body: cameraCommand(event.currentTarget) });
       location.assign(`/cameras/${camera.id}/`);
     }, event.submitter);
   });
+  const createForm = document.querySelector('[data-camera-create]');
+  activate(createForm);
+  await run(catalog);
 }
 
 if (cameraId && document.querySelector('[data-line-form]')) {
@@ -41,6 +43,8 @@ if (cameraId && document.querySelector('[data-line-form]')) {
   const overlay = document.querySelector('[data-line-overlay]');
   const image = document.querySelector('[data-line-image]');
   let pointIndex = 0;
+  lineForm.inert = true;
+  cameraForm.inert = true;
 
   /** Рисует line из numeric inputs; позволяет исправлять точки с клавиатуры. */
   function draw() {
@@ -58,19 +62,6 @@ if (cameraId && document.querySelector('[data-line-form]')) {
     document.querySelector('[data-camera-offline]').hidden = true;
   });
   image.addEventListener('error', () => { document.querySelector('[data-camera-offline]').hidden = false; });
-  await run(async () => {
-    const [camera, line, system] = await Promise.all([api(`/api/v1/cameras/${cameraId}`), api(`/api/v1/cameras/${cameraId}/guard-line`), api('/api/v1/system-settings')]);
-    document.querySelector('[data-camera-name]').textContent = camera.name;
-    for (const key of ['name', 'location']) cameraForm.elements[key].value = camera[key];
-    cameraForm.elements.enabled.checked = camera.enabled;
-    image.src = `/api/v1/cameras/${cameraId}/snapshot`;
-    if (line) {
-      for (const point of ['start', 'end']) for (const axis of ['x', 'y']) lineForm.elements[`${point}_${axis}`].value = line[point][axis];
-      for (const key of ['inside_side', 'direction', 'min_confidence']) lineForm.elements[key].value = line[key];
-      lineForm.elements.enabled.checked = line.enabled; draw();
-    } else lineForm.elements.min_confidence.value = system.default_confidence;
-    if (!admin) for (const input of [...lineForm.elements, ...cameraForm.elements]) input.disabled = true;
-  });
   const refreshFrame = el('button', { type: 'button', className: 'button', text: 'Обновить кадр' });
   refreshFrame.addEventListener('click', () => { image.src = `/api/v1/cameras/${cameraId}/snapshot?t=${Date.now()}`; });
   image.parentElement.after(refreshFrame);
@@ -99,4 +90,19 @@ if (cameraId && document.querySelector('[data-line-form]')) {
   document.querySelector('[data-camera-disable]')?.addEventListener('click', event => run(async () => {
     await api(`/api/v1/cameras/${cameraId}`, { method: 'DELETE' }); cameraForm.elements.enabled.checked = false; toast('Камера отключена.');
   }, event.currentTarget));
+  await run(async () => {
+    const [camera, line, system] = await Promise.all([api(`/api/v1/cameras/${cameraId}`), api(`/api/v1/cameras/${cameraId}/guard-line`), api('/api/v1/system-settings')]);
+    document.querySelector('[data-camera-name]').textContent = camera.name;
+    for (const key of ['name', 'location']) cameraForm.elements[key].value = camera[key];
+    cameraForm.elements.enabled.checked = camera.enabled;
+    image.src = `/api/v1/cameras/${cameraId}/snapshot`;
+    if (line) {
+      for (const point of ['start', 'end']) for (const axis of ['x', 'y']) lineForm.elements[`${point}_${axis}`].value = line[point][axis];
+      for (const key of ['inside_side', 'direction', 'min_confidence']) lineForm.elements[key].value = line[key];
+      lineForm.elements.enabled.checked = line.enabled; draw();
+    } else lineForm.elements.min_confidence.value = system.default_confidence;
+    if (!admin) for (const input of [...lineForm.elements, ...cameraForm.elements]) input.disabled = true;
+    activate(lineForm);
+    activate(cameraForm);
+  });
 }

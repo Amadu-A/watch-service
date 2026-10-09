@@ -30,6 +30,12 @@ RUN mkdir -p media staticfiles .cache models && useradd --uid 10001 --create-hom
 USER watcher
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--worker-class", "gthread", "--workers", "2", "--threads", "32", "--timeout", "90", "--access-logfile", "-"]
 
+FROM base AS ops
+USER root
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+USER watcher
+ENTRYPOINT ["python", "-m", "core.bootstrap"]
+
 FROM base AS vision
 ENV YOLO_AUTOINSTALL=false YOLO_CONFIG_DIR=/app/.cache/ultralytics
 RUN uv sync --frozen --no-dev --extra vision

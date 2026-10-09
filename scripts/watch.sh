@@ -10,16 +10,22 @@ else
   export PYTHONPATH="$TASK_ROOT/src"
 fi
 mkdir -p .cache
+if command -v id >/dev/null 2>&1; then
+  export WATCH_UID="$(id -u)"
+  export WATCH_GID="$(id -g)"
+fi
 COMPOSE=(docker compose --env-file .env.example)
 if [[ -f .env ]]; then COMPOSE+=(--env-file .env); fi
 COMPOSE+=(-f compose.yaml)
 
-# Все команды используют один механизм layered env; секреты не source-ятся как shell code.
+# Compose читает приватный .env; локальные проверки используют uv на рабочей станции.
 uv_python() { uv run --no-sync python "$@"; }
 compose() { "${COMPOSE[@]}" "$@"; }
+build_ops() { compose --profile ops build ops; }
+ops() { compose --profile ops run --rm --no-deps ops "$@"; }
 sync_dependencies() {
   if ! command -v uv >/dev/null 2>&1; then
-    echo 'uv не найден. Установите uv на сервере перед запуском watch.sh.' >&2
+    echo 'uv нужен только для локальных проверок; установите его на рабочей станции.' >&2
     return 127
   fi
   uv sync --frozen --no-extra vision
@@ -37,18 +43,20 @@ discover() {
 }
 prepare_network() {
   local network_name
-  network_name="$(uv_python -m core.bootstrap value SHARED_NETWORK)"
+  network_name="$(ops value SHARED_NETWORK)"
   docker network inspect "$network_name" >/dev/null 2>&1 || docker network create "$network_name"
 }
 preflight() {
   [[ -f .env ]] || { echo 'Сначала выполните watch.sh init и настройте .env.'; exit 1; }
   discover
+  build_ops
+  ops check
   prepare_network
   compose config --quiet
 }
 vision_service() {
   local device
-  device="$(uv_python -m core.bootstrap value VISION_DEVICE)"
+  device="$(ops value VISION_DEVICE)"
   if [[ "$device" == cpu ]]; then
     echo vision-cpu
   else
@@ -94,27 +102,29 @@ container_tests() {
 deploy() {
   [[ -z "$(git status --porcelain)" ]] || { echo 'Развёртывание требует чистый checkout.'; exit 1; }
   git pull --ff-only origin main
-  sync_dependencies
   preflight
-  local vision alternate
-  vision="$(vision_service)"
-  if [[ "$vision" == vision ]]; then alternate=vision-cpu; else alternate=vision; fi
-  compose build web "$vision" notification-worker scheduler
+  local vision
+  local services=(web notification-worker scheduler)
+  if [[ "$(ops value VISION_ENABLED)" == true ]]; then
+    vision="$(vision_service)"
+    services+=("$vision")
+  fi
+  compose build "${services[@]}"
   container_tests
   compose up -d --wait postgres redis
   compose run --rm --no-deps web python manage.py migrate --noinput
-  compose --profile gpu --profile cpu stop "$alternate"
-  compose up -d --wait --wait-timeout 180 --force-recreate web "$vision" notification-worker scheduler
+  compose --profile gpu --profile cpu stop vision vision-cpu
+  compose up -d --wait --wait-timeout 180 --force-recreate "${services[@]}"
   compose --profile gpu --profile cpu ps
   compose exec -T web python -c 'import urllib.request; print(urllib.request.urlopen("http://localhost:8000/health/ready", timeout=5).read().decode())'
 }
 
 case "${1:-help}" in
-  init) sync_dependencies; uv_python -m core.bootstrap init ;;
+  init) build_ops; ops init ;;
   discover) discover ;;
   inspect-rabbit) docker inspect --format '{{json .NetworkSettings.Networks}}' "${2:?Имя RabbitMQ container}" ;;
-  rabbit) sync_dependencies; discover; prepare_network; uv_python -m core.bootstrap rabbit "${2:?Передайте имя shared RabbitMQ container}" ;;
-  model) sync_dependencies; uv_python -m core.bootstrap model ;;
+  rabbit) discover; build_ops; prepare_network; compose --profile ops run --rm --no-deps --user 0:0 --volume /var/run/docker.sock:/var/run/docker.sock ops rabbit "${2:?Передайте имя shared RabbitMQ container}" ;;
+  model) build_ops; ops model ;;
   browsers)
     sync_dependencies
     if command -v cygpath >/dev/null 2>&1; then uv run --no-sync playwright install --no-shell chromium
@@ -124,8 +134,8 @@ case "${1:-help}" in
   test) sync_dependencies; unit_tests ;;
   e2e) sync_dependencies; e2e_tests ;;
   format) sync_dependencies; uv run --no-sync ruff check src tests manage.py --fix; uv run --no-sync ruff format src tests manage.py ;;
-  preflight) sync_dependencies; preflight ;;
-  test-containers) sync_dependencies; preflight; container_tests ;;
+  preflight) preflight ;;
+  test-containers) preflight; container_tests ;;
   deploy) deploy ;;
   migrate) compose run --rm web python manage.py migrate --noinput ;;
   make-migrations) sync_dependencies; APP_ENV=testing DATABASE_ENGINE=sqlite uv_python manage.py makemigrations ;;

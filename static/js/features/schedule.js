@@ -1,7 +1,7 @@
 // static/js/features/schedule.js
 /** Weekly schedule editor с midnight intervals, IANA timezone и явным сохранением. */
 import { api } from '../api.js';
-import { el, run, toast } from '../components/ui.js';
+import { activate, el, run, toast } from '../components/ui.js';
 
 const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const labels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -24,13 +24,7 @@ function addInterval(day = 'monday', start = '19:00', end = '08:00') {
 }
 
 if (form) {
-  await run(async () => {
-    const [schedule, zones] = await Promise.all([api('/api/v1/control-schedule'), api('/api/v1/timezones')]);
-    form.elements.timezone.replaceChildren(...zones.map(zone => el('option', { value: zone, text: zone })));
-    form.elements.timezone.value = schedule.timezone;
-    form.elements.enabled.checked = schedule.enabled;
-    for (const day of days) for (const interval of schedule.week[day] || []) addInterval(day, interval.start, interval.end);
-  });
+  form.inert = true;
   form.querySelector('[data-interval-add]')?.addEventListener('click', () => addInterval());
   form.addEventListener('submit', event => {
     event.preventDefault();
@@ -40,5 +34,13 @@ if (form) {
       const saved = await api('/api/v1/control-schedule', { method: 'PUT', body: { timezone: form.elements.timezone.value, enabled: form.elements.enabled.checked, week } });
       document.body.dataset.timezone = saved.timezone; toast('Расписание сохранено.');
     }, event.submitter);
+  });
+  await run(async () => {
+    const [schedule, zones] = await Promise.all([api('/api/v1/control-schedule'), api('/api/v1/timezones')]);
+    form.elements.timezone.replaceChildren(...zones.map(zone => el('option', { value: zone, text: zone })));
+    form.elements.timezone.value = schedule.timezone;
+    form.elements.enabled.checked = schedule.enabled;
+    for (const day of days) for (const interval of schedule.week[day] || []) addInterval(day, interval.start, interval.end);
+    activate(form);
   });
 }

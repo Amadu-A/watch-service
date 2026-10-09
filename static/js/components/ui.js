@@ -39,6 +39,13 @@ export async function run(operation, button) {
   } finally { if (button) button.disabled = false; }
 }
 
+/** Включает кнопки формы после регистрации обработчиков и загрузки данных. */
+export function activate(form) {
+  if (!form) return;
+  for (const button of form.querySelectorAll('button[disabled]')) button.disabled = false;
+  form.inert = false;
+}
+
 /** Форматирует timestamp в timezone объекта вместо timezone исполнения сервера. */
 export function formatDate(value) {
   if (!value) return 'Нет данных';

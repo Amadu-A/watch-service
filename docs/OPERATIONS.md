@@ -23,63 +23,54 @@ Chromium E2E. `commit` повторяет проверки; коммит и push
 
 ## Сервер: подготовка
 
-Нужны Docker Engine с Compose plugin, доступ к общему RabbitMQ и `uv` в `PATH`.
-Отсутствие `uv` прерывает `watch.sh init`, поэтому сначала установите его
-[официальным установщиком](https://docs.astral.sh/uv/getting-started/installation/):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-uv --version
-```
-
-После pull создайте приватный `.env`. Команда `init` генерирует четыре секрета
-без вывода их значений и не перезаписывает существующий файл. Затем заполните
-производственные параметры **точно по разделу [README.md](../README.md#что-записать-в-env-на-сервере)**.
-Особенно нужны `APP_ENV=production`, `DJANGO_DEBUG=false`,
-`DATABASE_ENGINE=postgresql`, `VISION_DEVICE=0`, реальные host/CSRF и камеры.
-Без `POSTGRES_PASSWORD` из `.env` Compose намеренно отказывает в запуске.
+Нужны Docker Engine с Compose plugin, доступ к общей сети RabbitMQ и Git.
+`uv` и Python на хосте не нужны: `uv` находится в единственном `Dockerfile`.
+Профиль `ops` выполняет подготовку в одноразовом контейнере. Только команда
+`rabbit` временно подключает к нему Docker socket для `rabbitmqctl` в выбранном
+контейнере; web и workers доступа к socket не имеют.
 
 ```bash
 cd /home/main/projects/watch-service
 git pull --ff-only origin main
 bash scripts/watch.sh init
-# Отредактировать .env; сохранить уже сгенерированные секреты.
+# Команда создала .env с APP_ENV=production и четырьмя секретами.
+# При наличии HTTPS proxy добавьте реальные DJANGO_ALLOWED_HOSTS и DJANGO_CSRF_TRUSTED_ORIGINS.
 bash scripts/watch.sh rabbit shared-rabbitmq-1
-bash scripts/watch.sh model
 bash scripts/watch.sh test-containers
 bash scripts/watch.sh deploy
-bash scripts/watch.sh admin
-bash scripts/watch.sh import-cameras
 bash scripts/watch.sh status
 curl -fsS http://127.0.0.1:8086/health/live
 ```
+
+`init` сохраняет уже существующий `.env` без изменений. Пароль PostgreSQL
+проверяется `preflight` до запуска БД. Настройки по умолчанию находятся в
+`src/core/config.py`; [README](../README.md#что-записать-в-env-на-сервере)
+перечисляет все необходимые и условные строки `.env`.
 
 `rabbit` подключает выбранный существующий контейнер к сети `ai-shared` при
 необходимости и создаёт/обновляет только проектный vhost/user `warehouse-watch`.
 Сервис RabbitMQ не входит в Compose проекта и не перезапускается. Если контейнер
 уже в сети без alias `rabbitmq`, задайте его настоящее имя в `RABBITMQ_HOST`.
-`model` скачивает `models/yolo11n.pt`, если файла ещё нет. Файл модели и `.env`
-не входят в Git и Docker build context.
 
-`test-containers` проверяет код на временных PostgreSQL/Redis и проектном namespace
-RabbitMQ. `deploy` ещё раз выполняет тесты, применяет миграции и пересоздаёт
-`web`, выбранный vision-процесс, worker и scheduler. Он не очищает рабочую БД/media.
-Перед обновлением существующей БД нужен актуальный backup. При ошибке тестов
-развёртывание останавливается до миграций.
+При начальном `VISION_ENABLED=false` vision-образ не собирается и процесс не
+запускается. Камеры пока можно зарегистрировать, но кадры появятся после
+включения vision. Для GPU положите веса в `models/` или выполните
+`bash scripts/watch.sh model`, задайте `VISION_ENABLED=true`,
+`VISION_DEVICE=0` и при необходимости `VISION_GPU_ID`. Затем повторите
+`bash scripts/watch.sh deploy`. Серверу нужен NVIDIA Container Toolkit.
 
-## Выбор GPU или CPU
+`test-containers` проверяет код на временных PostgreSQL/Redis и проектном
+namespace RabbitMQ. `deploy` повторяет тесты, применяет миграции и пересоздаёт
+только процессы проекта. Он не очищает рабочую БД/media. Перед обновлением
+существующей БД нужен актуальный backup. При ошибке тестов развёртывание
+останавливается до миграций.
 
-Для production задайте `VISION_DEVICE=0` и нужный `VISION_GPU_ID` в `.env`.
-`watch.sh deploy` выберет профиль `gpu` и сервис `vision`; серверу нужен NVIDIA
-Container Toolkit. Для разработки без GPU задайте `APP_ENV=development`,
-`DJANGO_SECURE_COOKIES=false`, `VISION_DEVICE=cpu`; скрипт выберет профиль `cpu`
-и сервис `vision-cpu`. Альтернативный vision-сервис он останавливает.
-Префикс `WATCH_GPU=true` больше не нужен.
-
-Web по умолчанию доступен только на `127.0.0.1:8086`; используйте HTTPS reverse
-proxy. Для MJPEG proxy должен отключать buffering и разрешать длительные
-соединения. Порты PostgreSQL и Redis наружу не публикуются.
+Web по умолчанию доступен только на `127.0.0.1:8086`. Первичную проверку
+можно провести через SSH-туннель на `localhost:8086` в Chrome/Firefox. Для
+штатного доступа нужен HTTPS reverse proxy; локальное исключение Secure cookies
+не одинаково поддерживается браузерами. Для MJPEG отключите buffering
+в proxy и разрешите длительные соединения. Порты PostgreSQL
+и Redis наружу не публикуются.
 
 ## Обновление и диагностика
 
@@ -95,9 +86,10 @@ bash scripts/watch.sh logs notification-worker
 bash scripts/watch.sh logs scheduler
 ```
 
-При `VISION_DEVICE=cpu` смотрите `bash scripts/watch.sh logs vision-cpu`.
-`status` и Compose требуют заполненного `.env` с `POSTGRES_PASSWORD` даже до
-запуска контейнеров. `watch.sh stop` останавливает только процессы проекта.
+При `VISION_ENABLED=false` vision-сервис отсутствует; после включения GPU
+смотрите `bash scripts/watch.sh logs vision`.
+Команды развёртывания требуют заполненного `.env`; `preflight` проверяет его
+до запуска контейнеров. `watch.sh stop` останавливает только процессы проекта.
 PostgreSQL, Redis, media и общий RabbitMQ не удаляются. `deploy` повторяет pull,
 поэтому после ручного pull возможна строка `Already up to date`.
 

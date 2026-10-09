@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Типизированные параметры; секреты скрыты в repr и не выдаются транспортом."""
 
     model_config = SettingsConfigDict(
-        env_file=(ROOT / ".env.example", ROOT / ".env"),
+        env_file=ROOT / ".env",
         extra="ignore",
         case_sensitive=False,
         hide_input_in_errors=True,
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     django_secret_key: SecretStr = SecretStr("")
     django_allowed_hosts: str = "localhost,127.0.0.1"
     django_csrf_trusted_origins: str = ""
-    django_secure_cookies: bool = False
+    django_secure_cookies: bool = True
     database_engine: str = "postgresql"
     postgres_host: str = "postgres"
     postgres_port: int = 5432
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     notification_max_attempts: int = Field(default=5, ge=1, le=20)
     notification_timeout_seconds: int = Field(default=15, ge=1, le=120)
-    vision_enabled: bool = True
+    vision_enabled: bool = False
     vision_device: str = "cpu"
     vision_model: str = "models/yolo11n.pt"
     vision_fps: int = Field(default=5, ge=1, le=30)

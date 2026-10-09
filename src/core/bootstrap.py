@@ -8,16 +8,21 @@ import os
 import secrets
 import subprocess
 import urllib.request
+from pathlib import Path
 
 from cryptography.fernet import Fernet
-from dotenv import dotenv_values
 
 from core.config import ROOT, Settings
 
 
+def operations_root() -> Path:
+    """Возвращает корень проекта, примонтированный в служебный контейнер."""
+    return Path(os.environ.get("WATCH_OPERATIONS_ROOT", ROOT))
+
+
 def init_environment() -> None:
     """Создаёт только отсутствующий sparse .env; существующие deployment secrets сохраняются."""
-    path = ROOT / ".env"
+    path = operations_root() / ".env"
     if path.exists():
         print(".env уже существует; значения сохранены.")
         return
@@ -29,7 +34,8 @@ def init_environment() -> None:
     }
     descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
-        file.write("# Приватные значения. Остальной baseline загружается из .env.example.\n")
+        file.write("# Секреты окружения; постоянные значения заданы в Settings.\n")
+        file.write("APP_ENV=production\n")
         for key, value in values.items():
             file.write(f"{key}={value}\n")
     print("Создан sparse .env; секретные значения не выводятся.")
@@ -37,8 +43,9 @@ def init_environment() -> None:
 
 def download_model() -> None:
     """Загружает baseline pretrained weights в ignored models, без установки YOLO на host."""
-    path = ROOT / Settings().vision_model
-    if not path.resolve().is_relative_to(ROOT):
+    root = operations_root()
+    path = root / Settings().vision_model
+    if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError("VISION_MODEL должен находиться в папке проекта")
     if path.exists():
         print("Weights уже существуют; файл не перезаписан.")
@@ -65,11 +72,7 @@ def provision_rabbitmq(container: str) -> None:
     if not password:
         raise ValueError("Задайте RABBITMQ_PASSWORD")
 
-    network = (
-        os.environ.get("SHARED_NETWORK")
-        or dotenv_values(ROOT / ".env").get("SHARED_NETWORK")
-        or dotenv_values(ROOT / ".env.example")["SHARED_NETWORK"]
-    )
+    network = os.environ.get("SHARED_NETWORK", "ai-shared")
     networks = json.loads(
         subprocess.run(
             ["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container],
@@ -127,7 +130,7 @@ def provision_rabbitmq(container: str) -> None:
 def main() -> None:
     """Разбирает операцию watch.sh, не исполняя произвольный пользовательский shell."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["init", "model", "rabbit", "value"])
+    parser.add_argument("action", choices=["init", "model", "rabbit", "value", "check"])
     parser.add_argument("argument", nargs="?")
     args = parser.parse_args()
     if args.action == "init":
@@ -138,17 +141,25 @@ def main() -> None:
         if not args.argument:
             raise ValueError("Передайте имя shared RabbitMQ container из discover")
         provision_rabbitmq(args.argument)
+    elif args.action == "check":
+        config = Settings()
+        if config.app_env != "production":
+            raise ValueError("Для сервера задайте APP_ENV=production")
+        for name in ("postgres_password", "rabbitmq_password", "camera_credentials_key"):
+            if not getattr(config, name).get_secret_value():
+                raise ValueError(f"Отсутствует обязательный секрет: {name.upper()}")
+        if not config.django_secure_cookies:
+            raise ValueError("В production требуются защищённые cookies")
+        print("Конфигурация production проверена; секреты не выводятся.")
     else:
-        # Только несекретные значения для script dispatch; произвольные secrets читать нельзя.
-        allowed = {"SHARED_NETWORK", "WEB_PORT", "VISION_DEVICE", "APP_ENV"}
-        if args.argument not in allowed:
+        if args.argument == "SHARED_NETWORK":
+            print(os.environ.get("SHARED_NETWORK", "ai-shared"))
+        elif args.argument == "VISION_DEVICE":
+            print(Settings().vision_device)
+        elif args.argument == "VISION_ENABLED":
+            print(str(Settings().vision_enabled).lower())
+        else:
             raise ValueError("Недопустимое имя параметра")
-        values = {
-            **dotenv_values(ROOT / ".env.example"),
-            **dotenv_values(ROOT / ".env"),
-            **os.environ,
-        }
-        print(values.get(args.argument, ""))
 
 
 if __name__ == "__main__":

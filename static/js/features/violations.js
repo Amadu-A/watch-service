@@ -1,7 +1,7 @@
 // static/js/features/violations.js
 /** История событий, filters, pagination, доказательства и notification retry. */
 import { api } from '../api.js';
-import { badge, el, filters, formatDate, run, toast } from '../components/ui.js';
+import { activate, badge, el, filters, formatDate, run, toast } from '../components/ui.js';
 
 const canRetry = document.body.dataset.canRetry === 'true';
 let page = 1, query = {};
@@ -79,10 +79,13 @@ async function detail() {
 }
 
 if (document.querySelector('[data-violation-rows]')) {
-  await run(async () => { await cameraOptions(); await loadHistory(); });
   document.querySelector('[data-violation-filter]')?.addEventListener('submit', event => { event.preventDefault(); query = filters(event.currentTarget); page = 1; run(loadHistory, event.submitter); });
   document.querySelector('[data-page-prev]')?.addEventListener('click', () => { page--; run(loadHistory); });
   document.querySelector('[data-page-next]')?.addEventListener('click', () => { page++; run(loadHistory); });
   setInterval(() => run(loadHistory), 10000);
+  await run(async () => {
+    await cameraOptions(); await loadHistory();
+    activate(document.querySelector('[data-violation-filter]'));
+  });
 }
 if (document.querySelector('[data-event-details]')) await run(detail);

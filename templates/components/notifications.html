@@ -2,11 +2,11 @@
 <section class="panel" data-notification-panel>
   <h2 class="panel__title">Настройки уведомлений</h2>
   <p class="notice" data-runtime-notice role="status">Проверка конфигурации…</p>
-  <form class="form" data-notification-settings>
+  <form class="form" data-notification-settings inert>
     <label class="form__switch">Отправлять уведомления<input type="checkbox" name="global_enabled" {% if not can_configure %}disabled{% endif %}></label>
     <label class="form__switch">Email<input type="checkbox" name="email_enabled" {% if not can_configure %}disabled{% endif %}></label>
     <label class="form__switch">Telegram<input type="checkbox" name="telegram_enabled" {% if not can_configure %}disabled{% endif %}></label>
-    {% if can_configure %}<button class="button" type="submit">Сохранить настройки</button>{% endif %}
+    {% if can_configure %}<button disabled class="button" type="submit">Сохранить настройки</button>{% endif %}
   </form>
   <p class="panel__hint">Адресаты и история отправок — в разделе <a href="/notifications/">«Уведомления»</a>.</p>
   {% if can_configure %}<button class="button" type="button" data-notification-test disabled>➤ Тестовое уведомление</button>{% endif %}

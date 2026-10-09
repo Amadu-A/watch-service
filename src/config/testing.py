@@ -16,6 +16,7 @@ from importlib import import_module
 os.environ["APP_ENV"] = "testing"
 os.environ.setdefault("DATABASE_ENGINE", "sqlite")
 os.environ["DJANGO_DEBUG"] = "false"
+os.environ["DJANGO_SECURE_COOKIES"] = "false"
 os.environ["DJANGO_ALLOWED_HOSTS"] = "localhost,127.0.0.1,testserver"
 
 os.environ["NOTIFICATIONS_ENABLED"] = "false"

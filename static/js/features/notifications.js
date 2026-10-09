@@ -1,7 +1,7 @@
 // static/js/features/notifications.js
 /** Business settings, runtime gate, recipient CRUD и delivery history с attempts. */
 import { api } from '../api.js';
-import { badge, el, formatDate, run, toast } from '../components/ui.js';
+import { activate, badge, el, formatDate, run, toast } from '../components/ui.js';
 
 const settingsForm = document.querySelector('[data-notification-settings]');
 const recipientForm = document.querySelector('[data-recipient-form]');
@@ -65,7 +65,7 @@ async function history() {
 }
 
 if (settingsForm) {
-  await run(async () => { await settings(); await loadRecipients(); await history(); });
+  settingsForm.inert = true;
   settingsForm.addEventListener('submit', event => { event.preventDefault(); run(async () => {
     await api('/api/v1/notification-settings', { method: 'PATCH', body: Object.fromEntries(['global_enabled', 'email_enabled', 'telegram_enabled'].map(key => [key, settingsForm.elements[key].checked])) });
     await settings(); toast('Настройки уведомлений сохранены.');
@@ -81,4 +81,9 @@ if (settingsForm) {
   document.querySelector('[data-delivery-prev]')?.addEventListener('click', () => { historyPage--; run(history); });
   document.querySelector('[data-delivery-next]')?.addEventListener('click', () => { historyPage++; run(history); });
   if (document.querySelector('[data-delivery-history]')) setInterval(() => run(history), 10000);
+  await run(async () => {
+    await settings(); await loadRecipients(); await history();
+    activate(settingsForm);
+    activate(recipientForm);
+  });
 }
