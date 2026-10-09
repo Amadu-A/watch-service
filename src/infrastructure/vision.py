@@ -140,10 +140,7 @@ class OpenCVFrameRenderer:
         try:
             height, width = frames[0].shape[:2]
             writer = cv2.VideoWriter(
-                str(path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                fps,
-                (width, height),
+                str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
             )
             if not writer.isOpened():
                 return None
@@ -167,7 +164,7 @@ class OpenCVFrameRenderer:
                     "-crf",
                     "25",
                     "-vf",
-                    "pad=ceil(iw/2)*2:ceil(iH/2)*2",
+                    "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                     "-pix_fmt",
                     "yuv420p",
                     "-movflags",
