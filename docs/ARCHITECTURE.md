@@ -49,19 +49,22 @@ Vision process держит одну модель YOLO и отдельные dec
 
 ## Процессы и сети
 
-Одна codebase запускает web, vision, notification worker и scheduler.
-PostgreSQL, Redis и media принадлежат проекту. Только worker и scheduler
-подключаются к внешней сети `ai-shared` для project vhost/user общего RabbitMQ.
-Docker Compose по умолчанию публикует web на `127.0.0.1:8086`; Redis и
-PostgreSQL наружу не публикуются. Флаги `NOTIFICATIONS_ENABLED`,
-`EMAIL_NOTIFICATIONS_ENABLED` и `TELEGRAM_NOTIFICATIONS_ENABLED` имеют
-приоритет над настройками UI. Исходный baseline выключает все каналы.
+Одна codebase запускает web, один выбранный vision-процесс, notification worker
+и scheduler. PostgreSQL, Redis и media принадлежат проекту. Рабочие worker и
+scheduler подключаются к внешней сети `ai-shared` для project vhost/user общего
+RabbitMQ; тестовый контейнер подключается к ней только на время integration тестов.
+Web публикуется на `127.0.0.1:8086` по умолчанию; Redis и PostgreSQL наружу не
+публикуются. Флаги уведомлений в `.env` имеют приоритет над настройками UI.
 
-## Архив legacy
+## Сборка и профили
 
-Старые файлы конфигурации и пустые package markers остаются только в `legacy/`.
-Рабочий код, Docker image и выдаваемый исходный архив не импортируют их.
-Очистка архивного каталога не требуется для выполнения приложения.
+В репозитории один `Dockerfile` со стадиями `source`, `base`, `vision` и `testing`.
+Один `compose.yaml` описывает рабочие сервисы и изолированные тестовые сервисы.
+Профиль `gpu` запускает `vision` с резервированием NVIDIA GPU; профиль `cpu`
+запускает `vision-cpu` без доступа к GPU. `watch.sh deploy` выбирает профиль по
+`VISION_DEVICE` и останавливает альтернативный vision-процесс.
+Профиль `tests` использует отдельные PostgreSQL и Redis; рабочие данные не затрагиваются.
+Старый каталог `legacy/` удалён после переноса активного кода.
 
 ## Проверки
 

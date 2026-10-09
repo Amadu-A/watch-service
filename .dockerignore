@@ -24,11 +24,3 @@ test-results
 *.sqlite3-*
 *.log
 source.tar.gz
-
-.reference
-.migration.py
-.frontend_move.py
-.config_edit.py
-.build_edit.py
-
-legacy

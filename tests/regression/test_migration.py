@@ -27,8 +27,8 @@ def test_source_download_contains_frontend_and_license():
         names = set(archive.getnames())
     prefix = "warehouse-perimeter-watch/"
     assert prefix + "LICENSE" in names
-    assert prefix + "Dockerfile.bootstrap" in names
-    assert prefix + "compose.bootstrap.yaml" in names
+    assert prefix + "Dockerfile" in names
+    assert prefix + "compose.yaml" in names
     assert prefix + "templates/base.html" in names
     assert prefix + "static/css/style.css" in names
     assert prefix + "static/js/features/layout-state.js" in names

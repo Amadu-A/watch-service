@@ -31,6 +31,20 @@ x-app: &app
     redis:
       condition: service_healthy
 
+x-vision: &vision
+  <<: *app
+  build:
+    context: .
+    target: vision
+  command: [python, -m, workers.vision]
+  volumes: [media:/app/media, './models:/app/models:ro']
+  healthcheck:
+    test: [CMD, python, -c, 'import os, redis; assert redis.Redis.from_url(os.environ["REDIS_URL"]).get("warehouse:vision:ready")']
+    interval: 15s
+    timeout: 5s
+    retries: 5
+    start_period: 90s
+
 services:
   postgres:
     image: postgres:17.11-bookworm
@@ -67,18 +81,18 @@ services:
       timeout: 8s
       retries: 5
   vision:
-    <<: *app
-    build:
-      context: .
-      target: vision
-    command: [python, -m, workers.vision]
-    volumes: [media:/app/media, './models:/app/models:ro']
-    healthcheck:
-      test: [CMD, python, -c, 'import os, redis; assert redis.Redis.from_url(os.environ["REDIS_URL"]).get("warehouse:vision:ready")']
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 90s
+    <<: *vision
+    profiles: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['${VISION_GPU_ID:-0}']
+              capabilities: [gpu]
+  vision-cpu:
+    <<: *vision
+    profiles: [cpu]
   notification-worker:
     <<: *app
     command: [celery, -A, workers.celery_app, worker, --loglevel=INFO, --concurrency=2, -Q, warehouse.notifications]

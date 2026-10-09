@@ -1,151 +1,188 @@
-<!-- README.md: Описание продукта, схема слоёв, структура и связи PostgreSQL. -->
+<!-- README.md: Актуальная архитектура, конфигурация и запуск Warehouse Perimeter Watch. -->
 # Warehouse Perimeter Watch
 
-Видеоконтроль склада: люди в RTSP-потоках отслеживаются с помощью YOLO и ByteTrack.
-Пересечение контрольного отрезка в активное время создаёт нарушение с оригинальным
-и размеченным JPEG. Кабинет показывает камеры, историю, доставки и PDF/CSV отчёты.
-Интерфейс построен по приложенному рендеру; состояние LIVE появляется только при доступном потоке.
+Сервис контролирует периметр склада по RTSP-камерам. YOLO обнаруживает людей,
+ByteTrack ведёт их траектории, а правила геометрии и расписания определяют
+пересечение контрольной линии. Кабинет показывает камеры, нарушения, доказательства
+и PDF/CSV отчёты. Внешние уведомления по умолчанию выключены.
 
-Стек: Python 3.12, Django 5.2, DRF, PostgreSQL 17, Redis 7.4, Celery и shared RabbitMQ.
-Собственная resident модель обслуживает все камеры; у каждой камеры свой decoder и tracker.
-Проект распространяется под AGPL-3.0: [полный текст лицензии](LICENSE).
-Пользователь кабинета может скачать исходный код именно запущенной сборки через `/source/`.
+Стек: Python 3.12, Django 5.2, DRF, PostgreSQL 17, Redis 7.4, Celery,
+общий RabbitMQ и отдельный процесс компьютерного зрения. Интерфейс соответствует
+макету `renders/img.png`. Исходники запущенной сборки доступны авторизованному
+пользователю по `/source/`; лицензия — [AGPL-3.0](LICENSE).
 
-## Возможности
-
-- Регистрация и отключение камер, зашифрованные реквизиты, проверка RTSP, редактирование линии.
-- Персональная сетка: выбор, удаление из наблюдения, порядок, плотность и полный экран.
-- Гистерезис, минимальный возраст track и confidence, проверка отрезка, направления ENTRY/EXIT.
-- Недельное расписание с IANA timezone, ночными интервалами и конечной границей 24:00.
-- Подбор лучшего кадра вокруг подтверждённого пересечения; дополнительные MP4 H.264 при включённом флаге.
-- Фильтры истории, доказательства, статистика, PDF события и PDF/CSV периода до 2000 событий.
-- Email/Telegram: отдельные получатели, durable outbox, состояния и попытки, ограниченные повторы.
-- Роли: администратор, оператор, наблюдатель; session authentication и CSRF.
-
-Внешние отправки изначально выключены. Для разрешения нужны `NOTIFICATIONS_ENABLED=true`,
-флаг соответствующего канала в `.env` и бизнес-переключатели в кабинете.
-UI не может обойти серверные флаги. Redis хранит только кадры с TTL; события остаются в PostgreSQL.
-
-## Структура
-
-    src/config/              настройки Django и маршруты
-    src/core/                типизированная конфигурация, DI, logging, timing
-    src/domain/              чистые правила геометрии и расписания
-    src/application/         use-cases и порты камер, мониторинга, событий, отчётов
-    src/repositories/        адаптеры Django ORM
-    src/infrastructure/      RTSP, YOLO, Redis, media, PDF, SMTP, Telegram
-    src/interface/           CBV, DRF, сериализаторы и HTTP ошибки
-    src/accounts_app/        пользователи, роль и миграция с label accounts
-    src/persistence_app/     бизнес-модели и миграция с label persistence
-    src/workers/             vision и Celery процессы
-    templates/, static/      кабинет по рендеру renders/img.png
-    tests/                   unit, functional, regression, architecture,
-                             integration, frontend и E2E
-    scripts/watch.sh         локальные и серверные команды
-    legacy/                  архив старой конфигурации вне runtime
-
-Метки Django-приложений `accounts` и `persistence` сохраняют имена существующих
-таблиц и историю миграций. Конкретные зависимости собирает `src/core/container.py`;
-HTTP views получают готовые factories в маршрутизации.
-
-## Поток обработки
+## Блок-схема
 
 ```mermaid
 flowchart LR
-    C[RTSP камеры] --> R[Независимые decoder threads]
-    R --> Q[Очередь последнего кадра каждой камеры]
-    Q --> Y[Одна resident YOLO модель]
-    Y --> T[Отдельный ByteTrack каждой камеры]
-    T --> G[Отрезок, гистерезис, confidence]
-    G --> S[Расписание объекта]
-    S --> E[Подбор JPEG evidence]
-    E --> V[Транзакция события и outbox]
-    V --> DB[(Project PostgreSQL)]
-    E --> M[(Защищённый media volume)]
-    T --> K[(Project Redis: JPEG с TTL)]
-    K --> W[Django MJPEG / кабинет]
-    DB --> W
-    DB --> O[Outbox publisher]
-    O --> B[(Shared RabbitMQ: project vhost)]
-    B --> N[Notification worker: повторная проверка флагов]
-    N --> A[Email / Telegram]
-    W --> P[PDF / CSV]
+    CAM[RTSP-камеры] --> V[vision: декодер каждой камеры<br/>одна YOLO, отдельный ByteTrack]
+    V --> RULE[domain: линия, направление,<br/>гистерезис и расписание]
+    RULE --> DB[(PostgreSQL:<br/>нарушения и outbox)]
+    RULE --> MEDIA[(Приватный media volume:<br/>JPEG и PDF)]
+    V --> CACHE[(Redis:<br/>последний JPEG с TTL)]
+    CACHE --> WEB[web: Django API и кабинет]
+    DB --> WEB
+    MEDIA --> WEB
+    DB --> BEAT[scheduler: очистка и публикация outbox]
+    BEAT --> MQ[(Общий RabbitMQ:<br/>отдельный vhost проекта)]
+    MQ --> WORKER[notification-worker]
+    WORKER --> EXT[Email / Telegram]
+    WEB --> UI[Браузер пользователя]
 ```
 
-```mermaid
-flowchart TB
-    HTTP[CBV / serializers / session auth] --> APP[Application use-cases]
-    APP --> DOMAIN[Domain: геометрия, роли, расписание]
-    APP --> PORTS[Protocols: repositories / UoW / storage / senders]
-    INFRA[ORM / Fernet / Redis / FFmpeg / YOLO / SMTP / Telegram] -. implements .-> PORTS
-    ROOT[core/container.py] --> APP
-    ROOT --> INFRA
+Все сервисы проекта описаны в одном `compose.yaml`. `web`, PostgreSQL, Redis и
+media работают в приватной сети. Только `notification-worker`, `scheduler` и
+тестовый сервис подключаются к внешней сети `ai-shared`; общий RabbitMQ не входит
+в Compose проекта. Профиль `gpu` запускает `vision` с NVIDIA GPU, профиль `cpu` —
+`vision-cpu`. Скрипт выбирает профиль по `VISION_DEVICE`. Профиль `tests` использует
+отдельные временные PostgreSQL и Redis. Один `Dockerfile` содержит стадии
+`source`, `base`, `vision`, `testing`.
+
+В коде `interface` и `workers` вызывают операции `application`; правила лежат в
+`domain`. `application` обращается к портам, а `repositories` и `infrastructure`
+реализуют доступ к ORM, RTSP, Redis, файлам и внешним каналам.
+`core/container.py` связывает реализации в одном месте.
+
+## Структура репозитория
+
+```text
+Dockerfile                 стадии source/base/vision/testing
+compose.yaml               рабочие сервисы и профили gpu/cpu/tests
+.env.example               безопасные значения по умолчанию
+scripts/watch.sh           проверки, развёртывание и операции
+src/config/                настройки и маршруты Django
+src/core/                  конфигурация, сборка зависимостей, запуск
+src/domain/                геометрия, расписание и общие правила
+src/application/           операции и порты
+src/repositories/          адаптеры Django ORM
+src/infrastructure/        RTSP, YOLO, Redis, media, PDF, отправка
+src/interface/             CBV, DRF, сериализаторы, HTTP-ошибки
+src/accounts_app/          пользователи; прежний label accounts
+src/persistence_app/       модели и миграции; прежний label persistence
+src/workers/               vision, Celery worker и scheduler
+templates/, static/        кабинет по renders/img.png
+tests/                    unit, functional, regression, architecture,
+                          integration, frontend и E2E
+docs/                     архитектура, эксплуатация и приёмка
 ```
 
-## Связи в базе данных
+Существующие метки приложений, таблицы и миграции сохранены. Старый каталог
+`legacy/` удалён после переноса кода.
 
-```mermaid
-erDiagram
-    USER ||--o| MONITORING_LAYOUT : has
-    USER ||--o{ GENERATED_REPORT : owns
-    USER o|--o{ AUDIT_EVENT : changes
-    CAMERA ||--|| CAMERA_CREDENTIAL : encrypted
-    CAMERA ||--o| GUARD_LINE : configured
-    CAMERA ||--o{ VIOLATION : detects
-    GUARD_LINE o|--o{ VIOLATION : referenced
-    CONTROL_SCHEDULE ||--o{ CONTROL_SCHEDULE_INTERVAL : contains
-    VIOLATION ||--o{ VIOLATION_MEDIA : evidence
-    VIOLATION o|--o{ NOTIFICATION_DELIVERY : produces
-    NOTIFICATION_RECIPIENT o|--o{ NOTIFICATION_DELIVERY : addressed
-    NOTIFICATION_DELIVERY ||--o{ NOTIFICATION_DELIVERY_ATTEMPT : attempts
-    NOTIFICATION_DELIVERY ||--o| NOTIFICATION_OUTBOX : queued
+## Что записать в `.env` на сервере
+
+Сначала установите [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+на сервере и убедитесь, что `uv --version` работает в текущем shell:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv --version
 ```
 
-Раскладка содержит ordered UUID камер в JSON. Событие дополнительно хранит неизменяемые
-снимки названия/места камеры и линии. Удаление камеры через API означает отключение,
-поэтому история сохраняется. Тестовое уведомление имеет `violation_id=null`.
-`NotificationSettings` и `SystemSettings` — отдельные singleton таблицы.
+Из корня проекта выполните `bash scripts/watch.sh init`. Команда создаст `.env`
+с четырьмя уникальными значениями: `DJANGO_SECRET_KEY`, `CAMERA_CREDENTIALS_KEY`,
+`POSTGRES_PASSWORD`, `RABBITMQ_PASSWORD`. **Сохраните их без изменений и не
+публикуйте `.env` в Git.** Если файл уже есть, `init` его не перезаписывает.
 
-## Запуск и проверки
+Ниже — строки, которые нужно **добавить в созданный `.env` или изменить в нём**
+для запуска на сервере с NVIDIA GPU и HTTPS reverse proxy. Замените все значения
+в угловых скобках реальными; это не готовые значения для запуска.
 
-Все команды выполняются через [scripts/watch.sh](scripts/watch.sh).
-На Windows нужен Git Bash, `uv`, Node.js и установленный Chromium; сервер использует
-Docker Engine с Compose plugin, `uv`, shared RabbitMQ и NVIDIA Container Toolkit для production vision.
+```dotenv
+APP_ENV=production
+DJANGO_DEBUG=false
+DATABASE_ENGINE=postgresql
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,<ДОМЕН_ИЛИ_IP_ПРОКСИ>
+DJANGO_CSRF_TRUSTED_ORIGINS=https://<ДОМЕН_ИЛИ_IP_ПРОКСИ>
+DJANGO_SECURE_COOKIES=true
+WEB_BIND_IP=127.0.0.1
+WEB_PORT=8086
+
+SHARED_NETWORK=ai-shared
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_VHOST=warehouse-watch
+RABBITMQ_USER=warehouse-watch
+
+VISION_ENABLED=true
+VISION_DEVICE=0
+VISION_GPU_ID=0
+VISION_MODEL=models/yolo11n.pt
+DEFAULT_TIMEZONE=Europe/Moscow
+MEDIA_RETENTION_DAYS=30
+
+CAMERA_INDICES=1,2
+CAMERA_1_NAME=Главный вход
+CAMERA_1_IP=<IP_ПЕРВОЙ_КАМЕРЫ>
+CAMERA_1_PORT=554
+CAMERA_1_PATH=<RTSP_ПУТЬ_ПЕРВОЙ_КАМЕРЫ>
+CAMERA_1_USERNAME=<ЛОГИН_ПЕРВОЙ_КАМЕРЫ>
+CAMERA_1_PASSWORD=<ПАРОЛЬ_ПЕРВОЙ_КАМЕРЫ>
+CAMERA_2_NAME=Боковой вход
+CAMERA_2_IP=<IP_ВТОРОЙ_КАМЕРЫ>
+CAMERA_2_PORT=554
+CAMERA_2_PATH=<RTSP_ПУТЬ_ВТОРОЙ_КАМЕРЫ>
+CAMERA_2_USERNAME=<ЛОГИН_ВТОРОЙ_КАМЕРЫ>
+CAMERA_2_PASSWORD=<ПАРОЛЬ_ВТОРОЙ_КАМЕРЫ>
+
+NOTIFICATIONS_ENABLED=false
+EMAIL_NOTIFICATIONS_ENABLED=false
+TELEGRAM_NOTIFICATIONS_ENABLED=false
+EVENT_CLIP_ENABLED=false
+```
+
+`DATABASE_ENGINE=postgresql` и `DJANGO_DEBUG=false` нужны также командам
+`watch.sh rabbit` и `watch.sh model`: они читают `.env` до запуска контейнеров.
+`POSTGRES_DB=warehouse_watch`, `POSTGRES_USER=warehouse_watch`,
+`POSTGRES_HOST=postgres` и `REDIS_URL=redis://redis:6379/0` уже заданы в
+`.env.example`; Compose направляет приложение в собственные PostgreSQL/Redis.
+Значения `WEB_BIND_IP=127.0.0.1` и `WEB_PORT=8086` предполагают HTTPS proxy на
+этом же сервере. Укажите фактический домен proxy в обоих Django параметрах.
+Если камер пока нет, запишите `CAMERA_INDICES=` в `.env` и не вызывайте импорт:
+их можно будет добавить через кабинет после первого запуска. Адреса
+`192.0.2.*` в `.env.example` являются учебными и не подключаются.
+
+Для разработки без GPU используйте `APP_ENV=development`,
+`DJANGO_SECURE_COOKIES=false` и `VISION_DEVICE=cpu`; скрипт автоматически выберет
+профиль `cpu`. В production при включённом vision нужен GPU.
+
+Для реальной отправки уведомлений задайте `NOTIFICATIONS_ENABLED=true` и флаг
+нужного канала. Для почты заполните `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+`SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`, `SMTP_USE_TLS`; для Telegram —
+`TELEGRAM_BOT_TOKEN`. Затем добавьте своих получателей и включите бизнес-переключатели
+в кабинете. Пока флаги равны `false`, внешней отправки нет независимо от UI.
+Остальные настройки и безопасные значения по умолчанию перечислены в `.env.example`.
+
+## Запуск и проверка
+
+На Windows из PowerShell, находясь в корне проекта:
 
 ```powershell
-# PowerShell, из корня проекта. Секреты для локальных тестов не требуются.
 & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh browsers
 & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh local-check
-# По необходимости автоформатирование, затем повтор local-check:
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh format
 ```
 
-Полная последовательность первичного запуска, pull, пересборки, миграций,
-сетей и контейнерных тестов: [docs/OPERATIONS.md](docs/OPERATIONS.md).
-Правила дальнейшей разработки: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-Результаты текущей проверки и ручная приёмка: [docs/VALIDATION.md](docs/VALIDATION.md).
-Полное исходное ТЗ: [docs-specification.md](docs-specification.md).
+На сервере после настройки `.env`:
 
-## Конфигурация и хранение
+```bash
+bash scripts/watch.sh rabbit shared-rabbitmq-1
+bash scripts/watch.sh model
+bash scripts/watch.sh test-containers
+bash scripts/watch.sh deploy
+bash scripts/watch.sh status
+```
 
-`.env.example` — полный безопасный каталог. `watch.sh init` создаёт sparse `.env`
-с индивидуальными ключами и паролями и сохраняет существующий файл.
-IP/пути/пароли камер задаются там же; адреса `192.0.2.*` — примеры, импорт их пропускает.
-Credentials шифруются Fernet; ключ нужен для дальнейшей расшифровки существующих камер.
-Production vision требует явного GPU device; для разработки предусмотрен `VISION_DEVICE=cpu`.
+`deploy` повторяет контейнерные тесты, применяет миграции и пересоздаёт только
+сервисы проекта. Перед первым запуском создайте администратора командой
+`bash scripts/watch.sh admin`, затем импортируйте настроенные камеры командой
+`bash scripts/watch.sh import-cameras`. Полный порядок и ручная приёмка описаны в
+[эксплуатации](docs/OPERATIONS.md) и [проверках](docs/VALIDATION.md).
 
-Срок событий, media, отчётов, попыток и аудита — 1–30 дней, с дополнительным deployment потолком
-`MEDIA_RETENTION_DAYS`. Очистка запускается каждую минуту через Celery; orphan файлы тоже очищаются.
-При недоступном broker/диске данные удаляются после восстановления; для выполнения политики
-нужно наблюдать scheduler и запускать `watch.sh retention` при его отказе.
-Redis TTL — 10 секунд по умолчанию. Docker logs ограничены 5 файлами по 10 МБ;
-это ограничение объёма, сроки архивов и резервных копий задаются отдельно (до 30 дней).
+## Ограничения
 
-## Границы проверки
-
-Автоматические проверки используют настоящие Django/HTML/HTTP/PDF и синтетические кадры.
-Качество YOLO на конкретном складе, работа GPU, RTSP и внешних каналов требуют
-приёмки на сервере с настоящими устройствами. Доставка имеет семантику at least once:
-авария после принятия сообщения внешним провайдером до DB commit может вызвать повтор.
-Pending evidence до записи события находится в ограниченной памяти worker;
-аварийный restart в этот момент может потерять незаписанное событие.
+Автотесты проверяют HTTP, права доступа, правила событий, отчёты и браузерный
+интерфейс на синтетических кадрах. Качество YOLO, реальный RTSP, GPU и внешние
+каналы нужно проверить на сервере с оборудованием. Доставка уведомлений имеет
+семантику «как минимум один раз»: сбой после приёма внешним провайдером может
+привести к повторной доставке.

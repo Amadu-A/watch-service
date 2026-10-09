@@ -21,10 +21,7 @@ PUBLIC_FILES = (
     "manage.py",
     "package.json",
     "Dockerfile",
-    "Dockerfile.bootstrap",
     "compose.yaml",
-    "compose.bootstrap.yaml",
-    "compose.gpu.yaml",
 )
 PUBLIC_DIRECTORIES = ("src", "templates", "static", "tests", "scripts", "docs", ".github")
 

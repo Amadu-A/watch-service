@@ -1,40 +1,41 @@
-<!-- docs/VALIDATION.md: Локальные проверки миграции и ручная приёмка. -->
-# Проверка миграции
+<!-- docs/VALIDATION.md: Проверки единого Docker/Compose и ручная приёмка. -->
+# Проверка изменений
 
-На 08.10.2026 исходный код перенесён из `legacy/` в Django-приложения,
-domain, application, repositories, infrastructure, interface и workers.
-Шаблоны и статика находятся в корне. Исходный архив включает AGPL,
-frontend и необходимые файлы сборки. Не было коммита, push или запуска
-команд на сервере.
+На 09.10.2026 активный код перенесён из `legacy/`, каталог удалён. В репозитории
+остались один `Dockerfile` и один `compose.yaml`. Профили `gpu`, `cpu` и `tests`
+проверены через `docker compose config --quiet`; в CPU-профиле нет GPU reservation,
+в GPU-профиле есть одно NVIDIA device reservation.
 
 ## Автоматические проверки
 
-Локально проверены Python 3.12, Django 5.2, Ruff, `manage.py check`,
-`makemigrations --check --dry-run`, Node tests и Chromium E2E.
-Полный локальный запуск: 101 Python-тест пройден, 3 внешних теста пропущены;
-в число пройденных входят 5 Chromium E2E. Три Node-теста пройдены.
-Покрытие Python с ветвлениями — 80%. Пропущенные проверки реальных
-PostgreSQL, Redis и общего RabbitMQ запускаются только контейнерной командой.
-Локальный Docker daemon недоступен, поэтому образы и server runtime
-здесь не подтверждены. Подготовлен workflow .github/workflows/checks.yaml;
-его выполнение в GitHub зависит от push пользователя.
+На Windows пройдены Ruff, `manage.py check`, `makemigrations --check --dry-run`,
+101 Python-тест (включая 5 Chromium E2E) и 3 Node-теста. Три интеграционных
+теста внешних PostgreSQL, Redis и RabbitMQ локально пропущены. Покрытие Python
+с ветвлениями — 80%. Синтаксис `watch.sh` проверен. Docker daemon локально
+недоступен, поэтому образы, контейнерные тесты и реальный RTSP/GPU запуск ещё
+не подтверждены.
 
-## После push: сервер
+Из приложенного серверного вывода: предыдущая попытка не запустила сервис,
+поскольку на сервере отсутствовал `uv`; из-за этого `.env` не был создан,
+а Compose остановился на пустом `POSTGRES_PASSWORD`. После pull установите `uv`,
+создайте и заполните `.env` по [README.md](../README.md#что-записать-в-env-на-сервере).
+На сервере выполнить:
 
-Из `/home/main/projects/watch-service` выполнить `git pull --ff-only origin main`.
-Если `.env` ещё не создан, выполнить `bash scripts/watch.sh init` и заполнить
-секреты, адреса камер, host/CSRF и параметры vision. Для production задать
-`APP_ENV=production` и `DJANGO_SECURE_COOKIES=true`.
-Не отправлять `.env` в Git. Для общего RabbitMQ использовать только
-проектный vhost/user в существующей сети `ai-shared`.
+```bash
+cd /home/main/projects/watch-service
+git pull --ff-only origin main
+bash scripts/watch.sh init
+# Заполнить .env реальными значениями и сохранить сгенерированные секреты.
+bash scripts/watch.sh rabbit shared-rabbitmq-1
+bash scripts/watch.sh model
+bash scripts/watch.sh test-containers
+bash scripts/watch.sh deploy
+bash scripts/watch.sh status
+```
 
-    WATCH_GPU=true bash scripts/watch.sh test-containers
-    WATCH_GPU=true bash scripts/watch.sh deploy
-    bash scripts/watch.sh status
-
-При CPU development вместо `WATCH_GPU=true` запустить команды без префикса
-и установить `VISION_DEVICE=cpu`. `deploy` повторяет контейнерные тесты,
-затем применяет миграции и пересоздаёт только процессы этого проекта.
+`deploy` повторно запускает контейнерные тесты, затем применяет миграции и
+пересоздаёт только процессы проекта. При `VISION_DEVICE=0` выбирается GPU-профиль,
+при `VISION_DEVICE=cpu` — CPU-профиль без дополнительных Compose файлов.
 
 ## Ручная приёмка
 

@@ -9,7 +9,7 @@ COPY tests ./tests
 COPY scripts ./scripts
 COPY docs ./docs
 COPY .github ./.github
-COPY README.md LICENSE docs-specification.md pyproject.toml uv.lock .env.example .gitignore .gitattributes .dockerignore .python-version manage.py package.json Dockerfile Dockerfile.bootstrap compose.yaml compose.bootstrap.yaml compose.gpu.yaml ./
+COPY README.md LICENSE docs-specification.md pyproject.toml uv.lock .env.example .gitignore .gitattributes .dockerignore .python-version manage.py package.json Dockerfile compose.yaml ./
 RUN PYTHONPATH=/source/src python -m infrastructure.source_archive
 
 FROM python:3.12-slim-bookworm AS base

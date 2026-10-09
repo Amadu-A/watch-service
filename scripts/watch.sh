@@ -13,12 +13,17 @@ mkdir -p .cache
 COMPOSE=(docker compose --env-file .env.example)
 if [[ -f .env ]]; then COMPOSE+=(--env-file .env); fi
 COMPOSE+=(-f compose.yaml)
-if [[ "${WATCH_GPU:-false}" == true ]]; then COMPOSE+=(-f compose.gpu.yaml); fi
 
 # Все команды используют один механизм layered env; секреты не source-ятся как shell code.
 uv_python() { uv run --no-sync python "$@"; }
 compose() { "${COMPOSE[@]}" "$@"; }
-sync_dependencies() { uv sync --frozen --no-extra vision; }
+sync_dependencies() {
+  if ! command -v uv >/dev/null 2>&1; then
+    echo 'uv не найден. Установите uv на сервере перед запуском watch.sh.' >&2
+    return 127
+  fi
+  uv sync --frozen --no-extra vision
+}
 discover() {
   if command -v uname >/dev/null 2>&1; then uname -a; fi
   docker version
@@ -40,10 +45,14 @@ preflight() {
   discover
   prepare_network
   compose config --quiet
+}
+vision_service() {
   local device
   device="$(uv_python -m core.bootstrap value VISION_DEVICE)"
-  if [[ "$device" != cpu && "${WATCH_GPU:-false}" != true ]]; then
-    echo 'Для NVIDIA device запускайте с WATCH_GPU=true, чтобы применить GPU overlay.'; exit 1
+  if [[ "$device" == cpu ]]; then
+    echo vision-cpu
+  else
+    echo vision
   fi
 }
 unit_tests() {
@@ -83,16 +92,20 @@ container_tests() {
   return "$result"
 }
 deploy() {
-  [[ -z "$(git status --porcelain)" ]] || { echo 'Deployment требует чистый checkout.'; exit 1; }
+  [[ -z "$(git status --porcelain)" ]] || { echo 'Развёртывание требует чистый checkout.'; exit 1; }
   git pull --ff-only origin main
   sync_dependencies
   preflight
-  compose build web vision notification-worker scheduler
+  local vision alternate
+  vision="$(vision_service)"
+  if [[ "$vision" == vision ]]; then alternate=vision-cpu; else alternate=vision; fi
+  compose build web "$vision" notification-worker scheduler
   container_tests
   compose up -d --wait postgres redis
   compose run --rm --no-deps web python manage.py migrate --noinput
-  compose up -d --wait --wait-timeout 180 --force-recreate web vision notification-worker scheduler
-  compose ps
+  compose --profile gpu --profile cpu stop "$alternate"
+  compose up -d --wait --wait-timeout 180 --force-recreate web "$vision" notification-worker scheduler
+  compose --profile gpu --profile cpu ps
   compose exec -T web python -c 'import urllib.request; print(urllib.request.urlopen("http://localhost:8000/health/ready", timeout=5).read().decode())'
 }
 
@@ -120,17 +133,16 @@ case "${1:-help}" in
   user) compose run --rm web python manage.py create_watch_user "${2:?Имя пользователя}" "${3:?Роль пользователя}" ;;
   import-cameras) compose run --rm web python manage.py bootstrap_cameras ;;
   retention) compose exec -T web python -m infrastructure.storage.maintenance ;;
-  status) compose ps ;;
-  logs) compose logs --tail=100 "${2:-web}" ;;
-  stop) compose stop web vision notification-worker scheduler ;;
+  status) compose --profile gpu --profile cpu ps ;;
+  logs) compose --profile gpu --profile cpu logs --tail=100 "${2:-web}" ;;
+  stop) compose --profile gpu --profile cpu stop web vision vision-cpu notification-worker scheduler ;;
   commit)
     local_check
-    git add -A -- .gitignore .gitattributes .dockerignore .env.example .python-version pyproject.toml uv.lock package.json manage.py Dockerfile Dockerfile.bootstrap compose.yaml compose.bootstrap.yaml compose.gpu.yaml README.md LICENSE docs-specification.md src static templates tests scripts docs .github legacy
+    git add -u -- .
+    git add -A -- .gitignore .gitattributes .dockerignore .env.example .python-version pyproject.toml uv.lock package.json manage.py Dockerfile compose.yaml README.md LICENSE docs-specification.md src static templates tests scripts docs .github
+    git diff --cached --check
     git commit -m "${2:?Передайте сообщение коммита}"
     ;;
   push) git push origin main ;;
   *) echo 'watch.sh: init | discover | inspect-rabbit CONTAINER | rabbit CONTAINER | model | browsers | local-check | test | e2e | format | preflight | test-containers | deploy | migrate | make-migrations | admin | user NAME ROLE | import-cameras | retention | status | logs SERVICE | stop | commit MESSAGE | push' ;;
 esac
-
-
-
