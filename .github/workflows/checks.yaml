@@ -18,7 +18,7 @@ jobs:
         with:
           version: '0.12.23'
       - name: Установить зависимости
-        run: uv sync --frozen --no-extra vision
+        run: uv sync --frozen
       - name: Проверить стиль Python
         run: |
           uv run --no-sync ruff check src tests manage.py

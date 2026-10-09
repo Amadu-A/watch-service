@@ -2,11 +2,16 @@
 """Изолированная проверка PostgreSQL, Redis TTL и project vhost shared RabbitMQ."""
 
 import os
+import subprocess
+import sys
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from amqp.exceptions import ChannelError
 from django.db import close_old_connections, connection
 from kombu import Connection, Exchange, Queue
 from redis import Redis
@@ -97,3 +102,70 @@ def test_postgresql_serializes_duplicate_delivery_tasks():
     sender.send.assert_called_once()
     delivery.refresh_from_db()
     assert delivery.status == "SENT" and delivery.attempts.count() == 1
+
+
+def test_celery_consumer_starts_with_project_only_broker_permissions():
+    """Worker начинает чтение временной проектной очереди без celery.pidbox и celeryev."""
+    config = Settings()
+    name = f"warehouse.test.worker.{uuid4()}"
+    with (
+        Connection(
+            hostname=config.rabbitmq_host,
+            port=config.rabbitmq_port,
+            userid=config.rabbitmq_user,
+            password=config.rabbitmq_password.get_secret_value(),
+            virtual_host=config.rabbitmq_vhost,
+            connect_timeout=5,
+        ) as broker,
+        tempfile.TemporaryFile() as output,
+    ):
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "celery",
+                "-A",
+                "workers.celery_app",
+                "worker",
+                "--pool=solo",
+                "--concurrency=1",
+                "--without-gossip",
+                "--without-mingle",
+                "--without-heartbeat",
+                "--loglevel=WARNING",
+                "-Q",
+                name,
+                "--hostname",
+                name,
+            ],
+            stdout=output,
+            stderr=output,
+        )
+        try:
+            deadline = time.monotonic() + 20
+            ready = False
+            while process.poll() is None and time.monotonic() < deadline:
+                with broker.channel() as channel:
+                    queue = Queue(name, exchange=Exchange(name), routing_key=name)(channel)
+                    queue.declare()
+                    result = channel.queue_declare(queue=name, passive=True)
+                    if result.consumer_count > 0:
+                        ready = True
+                        break
+                time.sleep(0.2)
+            assert ready, "Celery consumer не запустился с проектными правами RabbitMQ"
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            for operation in ("queue_delete", "exchange_delete"):
+                try:
+                    with broker.channel() as channel:
+                        getattr(channel, operation)(
+                            **{"queue" if operation == "queue_delete" else "exchange": name}
+                        )
+                except ChannelError:
+                    pass

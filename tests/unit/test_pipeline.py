@@ -31,7 +31,6 @@ def pipeline(*, enabled=True, create=None):
         renderer=Mock(
             original=Mock(return_value=b"jpeg"), annotated=Mock(return_value=b"annotated")
         ),
-        cache=Mock(),
         crossing_policy=LineCrossingPolicy(),
         schedule_provider=lambda: {
             "enabled": enabled,
@@ -71,13 +70,14 @@ def test_best_frame_preserves_crossing_time_and_deduplicates():
     assert evidence_tracks[0]["confidence"] == 0.99
 
 
-def test_schedule_suppresses_events_but_keeps_live_frames():
-    """Выключенный контроль запрещает нарушения, сохраняя просмотр кадров."""
+def test_schedule_suppresses_events_and_preserves_evidence_buffer():
+    """Выключенный контроль запрещает нарушения; bounded evidence остаётся независимым от live."""
     item = pipeline(enabled=False)
     last = observe(item, [(0.3, 0.9)] * 3 + [(0.7, 0.9)] * 10)
     item.flush(last, force=True)
     item.create_violation.execute.assert_not_called()
-    assert item.cache.put.call_count == 13
+    assert len(item.buffer) <= 7
+    assert not hasattr(item, "cache")
 
 
 def test_camera_state_is_independent_and_old_tracks_expire():

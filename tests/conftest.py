@@ -72,6 +72,7 @@ def isolated_dependencies(
 
     c.configuration.cache_clear()
     c.frames.cache_clear()
+    c.captured_frames.cache_clear()
 
     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
 

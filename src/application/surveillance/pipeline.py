@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from application.ports import LiveFrameCache
 from application.surveillance.ports import (
     FrameRenderer,
     ObjectTracker,
@@ -52,7 +51,6 @@ class CameraPipeline:
         detector: PersonDetector,
         tracker: ObjectTracker,
         renderer: FrameRenderer,
-        cache: LiveFrameCache,
         crossing_policy,
         schedule_provider: Callable[[], dict],
         create_violation: ViolationCreator,
@@ -66,7 +64,7 @@ class CameraPipeline:
     ):
         """Получает все ports извне; ограничивает память количеством кадров и track TTL."""
         self.camera, self.line = camera, line
-        self.detector, self.tracker, self.renderer, self.cache = detector, tracker, renderer, cache
+        self.detector, self.tracker, self.renderer = detector, tracker, renderer
         self.crossing_policy, self.schedule_provider, self.create_violation = (
             crossing_policy,
             schedule_provider,
@@ -87,18 +85,14 @@ class CameraPipeline:
         self.schedule_policy = SchedulePolicy()
 
     def process(self, frame, timestamp: datetime) -> None:
-        """Публикует annotated live frame и создаёт события только при активном расписании."""
+        """Обрабатывает person tracks и доказательства; публикацией live JPEG владеет CPU-захват."""
         self.flush(timestamp)
         if len(self.pending) >= self.max_pending:
             raise RuntimeError("evidence_backlog_full")
-        detections = self.detector.detect(frame)
+        detections = self.detector.detect(frame, timestamp)
         tracks = self.tracker.update(detections, frame)
         schedule = self.schedule_provider()
         original = self.renderer.original(frame)
-        local_time = timestamp.astimezone(ZoneInfo(schedule["timezone"]))
-        label = f"{self.camera['name']} | {local_time.isoformat()}"
-        annotated = self.renderer.annotated(frame, tracks, self.line, label)
-        self.cache.put(self.camera["id"], annotated)
         self.buffer.append((timestamp, frame, original, tracks))
         line = None
         if self.line:

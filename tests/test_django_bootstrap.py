@@ -83,3 +83,34 @@ def test_existing_styles_are_discoverable() -> None:
 def test_existing_base_template_is_discoverable() -> None:
     """Проверяет обнаружение базового шаблона Django."""
     assert get_template("base.html") is not None
+
+
+def test_fresh_celery_process_initializes_django_and_registers_tasks():
+    """Celery загружает Django до ORM-адаптеров и регистрирует задачи без внешнего broker."""
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    environment = {
+        **os.environ,
+        "APP_ENV": "testing",
+        "DATABASE_ENGINE": "sqlite",
+        "DJANGO_SETTINGS_MODULE": "config.testing",
+        "PYTHONPATH": str(root / "src"),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from workers.celery_app import app; app.loader.init_worker(); "
+            "from django.apps import apps; assert apps.ready; "
+            "assert {'warehouse.send_delivery', 'warehouse.publish_outbox', "
+            "'warehouse.retention'} <= set(app.tasks)",
+        ],
+        env=environment,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, "Celery Django bootstrap failed"

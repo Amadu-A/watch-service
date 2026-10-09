@@ -68,16 +68,59 @@ def probe(connection: dict) -> bool:
     return probe_rtsp(connection)
 
 
-def vision_detector():
-    """Создаёт единственную модель в процессе vision без автоматической замены GPU на CPU."""
-    from infrastructure.vision import UltralyticsPersonDetector
+@cache
+def inference_client():
+    """Ограничивает HTTP-пул клиента shared CV API без автоматических повторов POST."""
+    import httpx
+
+    return httpx.Client(limits=httpx.Limits(max_connections=2, max_keepalive_connections=2))
+
+
+def vision_detector(camera_id: str, session_id: str):
+    """Собирает клиент согласованного внешнего CV API для одной camera-local сессии."""
+    from infrastructure.inference import SharedPersonDetector
 
     config = configuration()
-    return (
-        UltralyticsPersonDetector(config.vision_model, config.vision_device)
-        if config.vision_enabled
-        else None
+    if not config.vision_enabled:
+        return None
+    return SharedPersonDetector(
+        inference_client(),
+        config.vision_inference_url,
+        config.vision_inference_token.get_secret_value(),
+        camera_id,
+        session_id,
+        frame_renderer(),
+        config.vision_inference_timeout_seconds,
     )
+
+
+@cache
+def captured_frames():
+    """Передаёт исходные JPEG отдельному inference-процессу через project Redis."""
+    from infrastructure.capture import RedisCapturedFrameStore
+
+    return RedisCapturedFrameStore(frames().client, configuration().vision_frame_ttl_seconds)
+
+
+def capture_publisher(camera: dict, line: dict | None):
+    """Собирает публикацию live JPEG без зависимости от detector или broker."""
+    from application.surveillance.capture import PublishCameraFrame
+
+    return PublishCameraFrame(
+        camera,
+        line,
+        frame_renderer(),
+        frames(),
+        captured_frames(),
+        monitoring_repository().schedule()["timezone"],
+    )
+
+
+def captured_frame_decoder(jpeg: bytes):
+    """Подключает CPU-декодер исходного JPEG без RTSP и секретов камеры."""
+    from infrastructure.vision import decode_jpeg
+
+    return decode_jpeg(jpeg)
 
 
 def camera_source(connection):
@@ -95,19 +138,18 @@ def frame_renderer():
 
 
 def camera_pipeline(camera, line, detector, renderer):
-    """Внедряет отдельный tracker и общие model/cache в пайплайн одной камеры."""
+    """Внедряет shared track mapping и сохранение доказательств в camera-local пайплайн."""
     from application.surveillance.pipeline import CameraPipeline
     from domain.surveillance.geometry import LineCrossingPolicy
-    from infrastructure.vision import ByteTrackTracker
+    from infrastructure.inference import SharedTrackMapper
 
     config = configuration()
     return CameraPipeline(
         camera=camera,
         line=line,
         detector=detector,
-        tracker=ByteTrackTracker(config.vision_fps),
+        tracker=SharedTrackMapper(),
         renderer=renderer,
-        cache=frames(),
         crossing_policy=LineCrossingPolicy(
             min_age=config.vision_min_track_frames,
             stable_frames=config.vision_stable_frames,
@@ -251,3 +293,15 @@ def project_source():
 def project_license():
     """Читает только статический LICENSE проекта без пользовательского пути."""
     return (ROOT / "LICENSE").read_bytes()
+
+
+def inference_pipeline(camera: dict, line: dict | None, session_id: str):
+    """Создаёт отдельную shared tracking-сессию без публикации live JPEG."""
+    from uuid import uuid4
+
+    return camera_pipeline(
+        camera,
+        line,
+        vision_detector(camera["id"], f"{session_id}:{uuid4()}"),
+        frame_renderer(),
+    )

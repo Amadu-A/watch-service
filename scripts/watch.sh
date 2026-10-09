@@ -23,12 +23,13 @@ uv_python() { uv run --no-sync python "$@"; }
 compose() { "${COMPOSE[@]}" "$@"; }
 build_ops() { compose --profile ops build ops; }
 ops() { compose --profile ops run --rm --no-deps ops "$@"; }
+check_broker() { compose --profile ops run --rm --no-deps broker-check; }
 sync_dependencies() {
   if ! command -v uv >/dev/null 2>&1; then
     echo 'uv нужен только для локальных проверок; установите его на рабочей станции.' >&2
     return 127
   fi
-  uv sync --frozen --no-extra vision
+  uv sync --frozen
 }
 discover() {
   if command -v uname >/dev/null 2>&1; then uname -a; fi
@@ -52,16 +53,8 @@ preflight() {
   build_ops
   ops check
   prepare_network
-  compose config --quiet
-}
-vision_service() {
-  local device
-  device="$(ops value VISION_DEVICE)"
-  if [[ "$device" == cpu ]]; then
-    echo vision-cpu
-  else
-    echo vision
-  fi
+  compose --profile inference config --quiet
+  check_broker
 }
 unit_tests() {
   local test_temp
@@ -103,28 +96,25 @@ deploy() {
   [[ -z "$(git status --porcelain)" ]] || { echo 'Развёртывание требует чистый checkout.'; exit 1; }
   git pull --ff-only origin main
   preflight
-  local vision
-  local services=(web notification-worker scheduler)
+  local services=(web camera-capture notification-worker scheduler)
   if [[ "$(ops value VISION_ENABLED)" == true ]]; then
-    vision="$(vision_service)"
-    services+=("$vision")
+    services+=(inference)
   fi
-  compose build "${services[@]}"
+  compose --profile inference build "${services[@]}"
   container_tests
   compose up -d --wait postgres redis
   compose run --rm --no-deps web python manage.py migrate --noinput
-  compose --profile gpu --profile cpu stop vision vision-cpu
-  compose up -d --wait --wait-timeout 180 --force-recreate "${services[@]}"
-  compose --profile gpu --profile cpu ps
+  compose --profile inference stop inference
+  compose --profile inference up -d --wait --wait-timeout 180 --force-recreate --remove-orphans "${services[@]}"
+  compose --profile inference ps
   compose exec -T web python -c 'import urllib.request; print(urllib.request.urlopen("http://localhost:8000/health/ready", timeout=5).read().decode())'
 }
 
 case "${1:-help}" in
   init) build_ops; ops init ;;
   discover) discover ;;
-  inspect-rabbit) docker inspect --format '{{json .NetworkSettings.Networks}}' "${2:?Имя RabbitMQ container}" ;;
-  rabbit) discover; build_ops; prepare_network; compose --profile ops run --rm --no-deps --user 0:0 --volume /var/run/docker.sock:/var/run/docker.sock ops rabbit "${2:?Передайте имя shared RabbitMQ container}" ;;
-  model) build_ops; ops model ;;
+  inspect-rabbit) docker inspect --format 'State={{json .State}} Networks={{json .NetworkSettings.Networks}}' "${2:?Имя RabbitMQ container}" ;;
+  rabbit) discover; build_ops; prepare_network; compose --profile ops run --rm --no-deps --user 0:0 --volume /var/run/docker.sock:/var/run/docker.sock ops rabbit "${2:?Передайте имя shared RabbitMQ container}"; check_broker ;;
   browsers)
     sync_dependencies
     if command -v cygpath >/dev/null 2>&1; then uv run --no-sync playwright install --no-shell chromium
@@ -143,9 +133,9 @@ case "${1:-help}" in
   user) compose run --rm web python manage.py create_watch_user "${2:?Имя пользователя}" "${3:?Роль пользователя}" ;;
   import-cameras) compose run --rm web python manage.py bootstrap_cameras ;;
   retention) compose exec -T web python -m infrastructure.storage.maintenance ;;
-  status) compose --profile gpu --profile cpu ps ;;
-  logs) compose --profile gpu --profile cpu logs --tail=100 "${2:-web}" ;;
-  stop) compose --profile gpu --profile cpu stop web vision vision-cpu notification-worker scheduler ;;
+  status) compose --profile inference ps ;;
+  logs) compose --profile inference logs --tail=100 "${2:-web}" ;;
+  stop) compose --profile inference stop web camera-capture inference notification-worker scheduler ;;
   commit)
     local_check
     git add -u -- .
@@ -154,5 +144,5 @@ case "${1:-help}" in
     git commit -m "${2:?Передайте сообщение коммита}"
     ;;
   push) git push origin main ;;
-  *) echo 'watch.sh: init | discover | inspect-rabbit CONTAINER | rabbit CONTAINER | model | browsers | local-check | test | e2e | format | preflight | test-containers | deploy | migrate | make-migrations | admin | user NAME ROLE | import-cameras | retention | status | logs SERVICE | stop | commit MESSAGE | push' ;;
+  *) echo 'watch.sh: init | discover | inspect-rabbit CONTAINER | rabbit CONTAINER | browsers | local-check | test | e2e | format | preflight | test-containers | deploy | migrate | make-migrations | admin | user NAME ROLE | import-cameras | retention | status | logs SERVICE | stop | commit MESSAGE | push' ;;
 esac

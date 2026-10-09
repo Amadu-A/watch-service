@@ -1,5 +1,5 @@
 # src/workers/vision.py
-"""Vision worker: независимые decoder threads и одна resident model для всех камер."""
+"""Необязательное распознавание последних JPEG через внешний shared CV API."""
 # ruff: noqa: E402
 
 import logging
@@ -7,9 +7,7 @@ import os
 import signal
 import threading
 import time
-from contextlib import suppress
 from datetime import UTC, datetime
-from queue import Empty, Full, Queue
 
 import django
 
@@ -21,73 +19,19 @@ from django.db import close_old_connections
 from core import container as c
 
 
-class CameraReader:
-    """Один thread на decoder: отказ RTSP не блокирует inference остальных камер."""
-
-    def __init__(
-        self, camera: dict, connection: dict, repository, max_backoff: int, source_factory
-    ):
-        """Создаёт bounded очередь последнего кадра и остановку decoder."""
-        self.camera, self.connection, self.repository = camera, connection, repository
-        self.max_backoff = max_backoff
-        self.source_factory = source_factory
-        self.queue = Queue(maxsize=1)
-        self.stop = threading.Event()
-        self.generation = 0
-        self.thread = threading.Thread(target=self.run, daemon=True)
-
-    def run(self) -> None:
-        """Переподключает камеру с bounded exponential backoff и state-change logs."""
-        retry = 1
-        while not self.stop.is_set():
-            source = None
-            try:
-                close_old_connections()
-                self.repository.status(self.camera["id"], "CONNECTING")
-                source = self.source_factory(self.connection)
-                self.generation += 1
-                first, status_at = True, 0
-                while not self.stop.is_set():
-                    frame = source.read()
-                    if frame is None:
-                        raise RuntimeError("camera_disconnected")
-                    if first or time.monotonic() >= status_at:
-                        self.repository.status(self.camera["id"], "ONLINE")
-                        first, retry = False, 1
-                        status_at = time.monotonic() + 5
-                    try:
-                        self.queue.put_nowait((datetime.now(UTC), frame, self.generation))
-                    except Full:
-                        with suppress(Empty):
-                            self.queue.get_nowait()
-                        self.queue.put_nowait((datetime.now(UTC), frame, self.generation))
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "camera_disconnected",
-                    extra={"event": "camera_disconnected", "camera_id": self.camera["id"]},
-                )
-                with suppress(Exception):
-                    self.repository.status(self.camera["id"], "OFFLINE")
-            finally:
-                if source:
-                    source.close()
-                close_old_connections()
-            self.stop.wait(retry)
-            retry = min(self.max_backoff, retry * 2)
-
-
-def log_failure(entry) -> None:
-    """Ограничивает повторные сообщения одной камеры одним событием в 30 секунд."""
+def log_failure(entry: dict) -> None:
+    """Ограничивает ошибки inference одной камеры одной записью в 30 секунд."""
     if time.monotonic() >= entry.get("error_log_at", 0):
         logging.getLogger(__name__).error(
-            "camera_pipeline_failed",
-            extra={"event": "camera_pipeline_failed", "camera_id": entry["reader"].camera["id"]},
+            "camera_inference_failed",
+            exc_info=True,
+            extra={"event": "camera_inference_failed", "camera_id": entry["camera"]["id"]},
         )
         entry["error_log_at"] = time.monotonic() + 30
 
 
-def flush_entry(entry, timestamp, force=False) -> bool:
-    """Сохраняет pending evidence; сбой одной камеры не останавливает остальные."""
+def flush_entry(entry: dict, timestamp: datetime, force: bool = False) -> bool:
+    """Сохраняет ожидающие доказательства, изолируя сбой одной камеры."""
     try:
         if entry["pipeline"]:
             entry["pipeline"].flush(timestamp, force=force)
@@ -97,19 +41,114 @@ def flush_entry(entry, timestamp, force=False) -> bool:
         return False
 
 
+class InferenceWorker:
+    """Читает bounded последние кадры, сохраняя отдельное состояние каждой камеры."""
+
+    def __init__(self, repository, captured, pipeline_factory, decoder, config, heartbeat=None):
+        """Получает порты без RTSP, credentials, доступа к GPU и live-cache writer."""
+        self.repository, self.captured, self.pipeline_factory = (
+            repository,
+            captured,
+            pipeline_factory,
+        )
+        self.decoder, self.config, self.entries = decoder, config, {}
+        self.heartbeat = heartbeat
+
+    def refresh(self) -> None:
+        """Обновляет камеры и конфигурацию линий с завершением ожидающих доказательств."""
+        cameras = {item["id"]: item for item in self.repository.list() if item["enabled"]}
+        for camera_id in list(self.entries):
+            if camera_id not in cameras:
+                entry = self.entries[camera_id]
+                entry["active"] = False
+                if flush_entry(entry, datetime.now(UTC), force=True):
+                    self.entries.pop(camera_id)
+        for camera_id, camera in cameras.items():
+            line = self.repository.line(camera_id)
+            version = (camera["updated_at"], line)
+            previous = self.entries.get(camera_id)
+            if previous and previous["version"] == version:
+                previous["active"] = True
+                continue
+            if previous:
+                previous["active"] = False
+                if not flush_entry(previous, datetime.now(UTC), force=True):
+                    continue
+            self.entries[camera_id] = {
+                "camera": camera,
+                "line": line,
+                "version": version,
+                "pipeline": None,
+                "session": None,
+                "last_key": None,
+                "last_at": None,
+                "active": True,
+            }
+
+    def tick(self, now: datetime | None = None) -> None:
+        """Не повторяет кадры и сбрасывает трекинг при reconnect, пропуске или смене линии."""
+        for camera_id, entry in self.entries.items():
+            current_time = now or datetime.now(UTC)
+            if self.heartbeat:
+                self.heartbeat()
+            try:
+                if not entry["active"]:
+                    flush_entry(entry, current_time, force=True)
+                    continue
+                captured = self.captured.get(camera_id)
+                if (
+                    captured is None
+                    or not 0
+                    <= (current_time - captured.captured_at).total_seconds()
+                    <= self.config.vision_frame_ttl_seconds
+                ):
+                    flush_entry(entry, current_time)
+                    continue
+                key = (captured.session_id, captured.sequence)
+                if key == entry["last_key"]:
+                    flush_entry(entry, current_time)
+                    continue
+                gap = (
+                    entry["last_at"]
+                    and (captured.captured_at - entry["last_at"]).total_seconds()
+                    > self.config.vision_track_ttl_seconds
+                )
+                if entry["session"] != captured.session_id or gap:
+                    if not flush_entry(entry, current_time, force=True):
+                        continue
+                    entry["pipeline"] = self.pipeline_factory(
+                        entry["camera"], entry["line"], captured.session_id
+                    )
+                    entry["session"] = captured.session_id
+                entry["last_key"], entry["last_at"] = key, captured.captured_at
+                frame = self.decoder(captured.jpeg)
+                entry["pipeline"].process(frame, captured.captured_at)
+            except Exception:
+                log_failure(entry)
+
+    def shutdown(self) -> None:
+        """Завершает pending evidence при штатной остановке inference-процесса."""
+        for entry in self.entries.values():
+            flush_entry(entry, datetime.now(UTC), force=True)
+
+
 def main() -> None:
-    """Загружает модель один раз и обновляет состав камер без перезапуска web."""
+    """Запускает внешний inference только при явно настроенном согласованном endpoint."""
     config = c.configuration()
-    detector = c.vision_detector()
-    renderer, repository, readers = (
-        c.frame_renderer(),
+    if not config.vision_enabled:
+        raise RuntimeError("VISION_ENABLED=false: запускайте camera-capture для просмотра")
+    worker = InferenceWorker(
         c.camera_service().repository,
-        {},
+        c.captured_frames(),
+        c.inference_pipeline,
+        c.captured_frame_decoder,
+        config,
+        lambda: c.frames().client.setex("warehouse:inference:ready", 10, "1"),
     )
     stop = threading.Event()
 
     def shutdown(signum, frame):
-        """Останавливает loop после штатного SIGTERM/SIGINT."""
+        """Останавливает обработку после SIGTERM или SIGINT."""
         stop.set()
 
     signal.signal(signal.SIGTERM, shutdown)
@@ -117,73 +156,18 @@ def main() -> None:
     refresh_at = 0
     try:
         while not stop.is_set():
-            c.frames().client.setex("warehouse:vision:ready", 10, "1")
             if time.monotonic() >= refresh_at:
                 close_old_connections()
-                cameras = {
-                    item["id"]: item for item in repository.list() if item["enabled"] and detector
-                }
-                for camera_id in list(readers):
-                    if (
-                        camera_id not in cameras
-                        or readers[camera_id]["version"] != cameras[camera_id]["updated_at"]
-                    ):
-                        entry = readers[camera_id]
-                        entry["reader"].stop.set()
-                        entry["reader"].thread.join(timeout=6)
-                        if not flush_entry(entry, datetime.now(UTC), force=True):
-                            continue
-                        readers.pop(camera_id)
-                for camera_id, camera in cameras.items():
-                    line = repository.line(camera_id)
-                    if camera_id in readers and readers[camera_id]["line"] != line:
-                        if not flush_entry(readers[camera_id], datetime.now(UTC), force=True):
-                            continue
-                        readers[camera_id]["pipeline"] = None
-                        readers[camera_id]["line"] = line
-                    if camera_id not in readers:
-                        reader = CameraReader(
-                            camera,
-                            c.cipher().decrypt(repository.connection(camera_id)),
-                            repository,
-                            config.vision_reconnect_max_seconds,
-                            c.camera_source,
-                        )
-                        readers[camera_id] = {
-                            "reader": reader,
-                            "version": camera["updated_at"],
-                            "line": line,
-                            "pipeline": None,
-                            "generation": -1,
-                        }
-                        reader.thread.start()
+                worker.refresh()
                 refresh_at = time.monotonic() + 5
-            for entry in readers.values():
-                try:
-                    timestamp, frame, generation = entry["reader"].queue.get_nowait()
-                except Empty:
-                    flush_entry(entry, datetime.now(UTC))
-                    continue
-                if entry["pipeline"] is None or generation != entry["generation"]:
-                    if not flush_entry(entry, timestamp, force=True):
-                        continue
-                    entry["pipeline"] = c.camera_pipeline(
-                        entry["reader"].camera,
-                        entry["line"],
-                        detector,
-                        renderer,
-                    )
-                    entry["generation"] = generation
-                try:
-                    entry["pipeline"].process(frame, timestamp)
-                except Exception:
-                    log_failure(entry)
+            worker.tick()
+            c.frames().client.setex("warehouse:inference:ready", 10, "1")
             stop.wait(1 / config.vision_fps)
     finally:
-        for entry in readers.values():
-            entry["reader"].stop.set()
-            flush_entry(entry, datetime.now(UTC), force=True)
-        c.frames().client.delete("warehouse:vision:ready")
+        worker.shutdown()
+        c.frames().client.delete("warehouse:inference:ready")
+        c.inference_client().close()
+        close_old_connections()
 
 
 if __name__ == "__main__":

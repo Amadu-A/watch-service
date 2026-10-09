@@ -1,16 +1,19 @@
 # src/core/bootstrap.py
-"""Операционные helpers единственного watch.sh: секреты, assets и shared RabbitMQ provisioning."""
+"""Подготовка окружения и проверка проектного доступа к общему RabbitMQ."""
 
 import argparse
-import hashlib
 import json
 import os
 import secrets
+import socket
 import subprocess
-import urllib.request
+import sys
+import time
 from pathlib import Path
 
+from amqp.exceptions import AMQPError
 from cryptography.fernet import Fernet
+from kombu import Connection
 
 from core.config import ROOT, Settings
 
@@ -41,29 +44,92 @@ def init_environment() -> None:
     print("Создан sparse .env; секретные значения не выводятся.")
 
 
-def download_model() -> None:
-    """Загружает baseline pretrained weights в ignored models, без установки YOLO на host."""
-    root = operations_root()
-    path = root / Settings().vision_model
-    if not path.resolve().is_relative_to(root.resolve()):
-        raise ValueError("VISION_MODEL должен находиться в папке проекта")
-    if path.exists():
-        print("Weights уже существуют; файл не перезаписан.")
-        return
-    if path.name != "yolo11n.pt":
-        raise ValueError("Автозагрузка поддерживает yolo11n.pt; другую модель положите вручную")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    url = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
-    with urllib.request.urlopen(url, timeout=120) as response:
-        content = response.read()
-    if len(content) < 100000:
-        raise RuntimeError("Не удалось получить model weights")
-    path.write_bytes(content)
-    print(f"Baseline yolo11n.pt загружен; SHA256: {hashlib.sha256(content).hexdigest()}")
+def docker_command(*arguments: str, capture: bool = False) -> str:
+    """Выполняет Docker без shell и скрывает вывод, который может содержать секреты."""
+    try:
+        result = subprocess.run(
+            ["docker", *arguments],
+            check=True,
+            stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        raise RuntimeError(
+            f"Не удалось выполнить Docker {arguments[0]}; проверьте имя контейнера и Docker socket."
+        ) from None
+    return result.stdout or ""
+
+
+def wait_for_rabbitmq(container: str, timeout_seconds: float = 30) -> None:
+    """Ожидает готовности уже запущенного shared брокера без управления его lifecycle."""
+    deadline = time.monotonic() + timeout_seconds
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "rabbitmq-diagnostics",
+                    "-q",
+                    "--timeout",
+                    "5",
+                    "check_running",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=min(5, remaining),
+            )
+            if result.returncode == 0:
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(1, remaining))
+    raise RuntimeError(
+        f"RabbitMQ в {container} не готов за {timeout_seconds:g} секунд. "
+        f"Проверьте docker logs --tail=100 {container}."
+    )
+
+
+def check_broker() -> None:
+    """Проверяет DNS, AMQP-вход и проектный vhost из общей сети контейнеров."""
+    config = Settings()
+    network = os.environ.get("SHARED_NETWORK", "ai-shared")
+    try:
+        with Connection(
+            hostname=config.rabbitmq_host,
+            port=config.rabbitmq_port,
+            userid=config.rabbitmq_user,
+            password=config.rabbitmq_password.get_secret_value(),
+            virtual_host=config.rabbitmq_vhost,
+            connect_timeout=5,
+        ) as broker:
+            broker.ensure_connection(max_retries=0, reraise_as_library_errors=False)
+    except socket.gaierror:
+        raise RuntimeError(
+            f"RabbitMQ: имя {config.rabbitmq_host} не разрешается в сети {network}. "
+            "Проверьте shared stack; выполните bash scripts/watch.sh rabbit ИМЯ_КОНТЕЙНЕРА."
+        ) from None
+    except AMQPError as error:
+        raise RuntimeError(
+            f"RabbitMQ: AMQP-вход в vhost {config.rabbitmq_vhost} отклонён "
+            f"({type(error).__name__}). Повторите watch.sh rabbit с паролем из .env."
+        ) from None
+    except OSError:
+        raise RuntimeError(
+            f"RabbitMQ: {config.rabbitmq_host}:{config.rabbitmq_port} недоступен. "
+            "Проверьте shared брокер и AMQP listener."
+        ) from None
+    print(f"RabbitMQ: AMQP-доступ к {config.rabbitmq_host}/{config.rabbitmq_vhost} проверен.")
 
 
 def provision_rabbitmq(container: str) -> None:
-    """Создаёт только project vhost/user через rabbitmqctl выбранного shared контейнера."""
+    """Проверяет shared брокер и настраивает только проектные vhost, пользователя и права."""
     config = Settings()
     user, vhost = config.rabbitmq_user, config.rabbitmq_vhost
     if not user.startswith("warehouse") or not vhost.startswith("warehouse"):
@@ -71,41 +137,47 @@ def provision_rabbitmq(container: str) -> None:
     password = config.rabbitmq_password.get_secret_value()
     if not password:
         raise ValueError("Задайте RABBITMQ_PASSWORD")
-
+    state = json.loads(
+        docker_command("inspect", "--format", "{{json .State}}", container, capture=True)
+    )
+    if not state.get("Running"):
+        raise RuntimeError(
+            f"RabbitMQ: {container} имеет состояние {state.get('Status')}. "
+            "Запустите брокер из shared-infrastructure, затем повторите watch.sh rabbit."
+        )
+    wait_for_rabbitmq(container)
     network = os.environ.get("SHARED_NETWORK", "ai-shared")
     networks = json.loads(
-        subprocess.run(
-            ["docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        ).stdout
+        docker_command(
+            "inspect",
+            "--format",
+            "{{json .NetworkSettings.Networks}}",
+            container,
+            capture=True,
+        )
     )
     if network not in networks:
-        subprocess.run(
-            ["docker", "network", "connect", "--alias", config.rabbitmq_host, network, container],
-            check=True,
-        )
+        docker_command("network", "connect", "--alias", config.rabbitmq_host, network, container)
     else:
-        aliases = networks[network].get("Aliases") or []
-        if config.rabbitmq_host not in aliases and config.rabbitmq_host != container:
+        names = [
+            *(networks[network].get("Aliases") or []),
+            *(networks[network].get("DNSNames") or []),
+        ]
+        if config.rabbitmq_host not in names and config.rabbitmq_host != container:
             raise ValueError(
-                "RabbitMQ уже в сети без нужного alias: "
-                "задайте RABBITMQ_HOST равным имени контейнера"
+                f"RabbitMQ в сети {network} без имени {config.rabbitmq_host}: "
+                f"задайте RABBITMQ_HOST={container} в .env."
             )
 
-    def control(*args, capture=False):
-        """Передаёт argv без shell и скрывает вывод команд, содержащих пароль."""
+    def control(*args: str, capture: bool = False) -> str:
+        """Передаёт argv и сообщает только имя неудачной команды, исключая пароль."""
         try:
-            return subprocess.run(
-                ["docker", "exec", container, "rabbitmqctl", *args],
-                check=True,
-                stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            ).stdout
-        except subprocess.CalledProcessError:
-            raise RuntimeError("rabbitmq_control_failed") from None
+            return docker_command("exec", container, "rabbitmqctl", *args, capture=capture)
+        except RuntimeError:
+            raise RuntimeError(
+                f"RabbitMQ: команда {args[0]} не выполнена в {container}. "
+                f"Проверьте docker logs --tail=100 {container}."
+            ) from None
 
     users = control("list_users", "--silent", capture=True)
     vhosts = control("list_vhosts", "--silent", capture=True)
@@ -120,27 +192,27 @@ def provision_rabbitmq(container: str) -> None:
         "-p",
         vhost,
         user,
-        "^warehouse\\..*",
-        "^warehouse\\..*",
-        "^warehouse\\..*",
+        r"^warehouse\..*",
+        r"^warehouse\..*",
+        r"^warehouse\..*",
     )
-    print("Project vhost/user настроены. Shared сервисы не перезапускались.")
+    print("Проектные vhost, пользователь и права RabbitMQ настроены.")
 
 
 def main() -> None:
-    """Разбирает операцию watch.sh, не исполняя произвольный пользовательский shell."""
+    """Разбирает операцию watch.sh без выполнения произвольного shell."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["init", "model", "rabbit", "value", "check"])
+    parser.add_argument("action", choices=["init", "rabbit", "value", "check", "check-broker"])
     parser.add_argument("argument", nargs="?")
     args = parser.parse_args()
     if args.action == "init":
         init_environment()
-    elif args.action == "model":
-        download_model()
     elif args.action == "rabbit":
         if not args.argument:
             raise ValueError("Передайте имя shared RabbitMQ container из discover")
         provision_rabbitmq(args.argument)
+    elif args.action == "check-broker":
+        check_broker()
     elif args.action == "check":
         config = Settings()
         if config.app_env != "production":
@@ -151,16 +223,17 @@ def main() -> None:
         if not config.django_secure_cookies:
             raise ValueError("В production требуются защищённые cookies")
         print("Конфигурация production проверена; секреты не выводятся.")
+    elif args.argument == "SHARED_NETWORK":
+        print(os.environ.get("SHARED_NETWORK", "ai-shared"))
+    elif args.argument == "VISION_ENABLED":
+        print(str(Settings().vision_enabled).lower())
     else:
-        if args.argument == "SHARED_NETWORK":
-            print(os.environ.get("SHARED_NETWORK", "ai-shared"))
-        elif args.argument == "VISION_DEVICE":
-            print(Settings().vision_device)
-        elif args.argument == "VISION_ENABLED":
-            print(str(Settings().vision_enabled).lower())
-        else:
-            raise ValueError("Недопустимое имя параметра")
+        raise ValueError("Недопустимое имя параметра")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (RuntimeError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

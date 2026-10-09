@@ -2,62 +2,53 @@
 """Контракты наших vision adapters проверяются без скачивания модели, GPU и RTSP."""
 
 import subprocess
-import sys
-from types import SimpleNamespace
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
-from infrastructure.vision import (
-    ByteTrackTracker,
-    UltralyticsPersonDetector,
-    connection_url,
-    probe_rtsp,
-)
-from workers.vision import CameraReader, flush_entry
+import httpx
+
+from infrastructure.inference import SharedPersonDetector, SharedTrackMapper
+from infrastructure.vision import connection_url, probe_rtsp
+from workers.capture import CameraReader
+from workers.vision import flush_entry
 
 
-def test_detector_model_loaded_once_and_person_output(monkeypatch, tmp_path):
-    """Несколько кадров используют одну модель и передают только person boxes в tracker."""
-    weights = tmp_path / "model.pt"
-    weights.write_bytes(b"fake-weights")
-    boxes = Mock()
-    boxes.cpu.return_value.numpy.return_value = "person-boxes"
-    model = Mock()
-    model.predict.return_value = [SimpleNamespace(boxes=boxes)]
-    constructor = Mock(return_value=model)
-    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=constructor))
-    detector = UltralyticsPersonDetector(str(weights), "0")
-    assert detector.detect("frame-1") == detector.detect("frame-2") == "person-boxes"
-    constructor.assert_called_once_with(str(weights))
-    assert model.predict.call_count == 2
-    assert model.predict.call_args.kwargs == {
-        "classes": [0],
-        "conf": 0.1,
-        "device": "0",
-        "verbose": False,
-    }
+def test_detector_reuses_http_client_and_preserves_frame_context():
+    """Кадры идут в shared API с camera/session/sequence; person tracks сохраняют bbox и ID."""
+    requests = []
 
+    def respond(request):
+        """Эмулирует документированный внешний CV-контракт без модели или GPU."""
+        requests.append(request)
+        assert b'name="image"' in request.content and b"jpeg" in request.content
+        return httpx.Response(
+            200,
+            json={
+                "version": 1,
+                "camera_id": "camera-1",
+                "session_id": "session-1",
+                "sequence": len(requests),
+                "tracks": [{"track_id": 24, "confidence": 0.91, "bbox": [0.1, 0.1, 0.4, 0.9]}],
+            },
+        )
 
-def test_tracker_mapping_and_global_counter(monkeypatch):
-    """BBox нормализуется по размеру кадра; новый tracker не переиспользует глобальные ID."""
-    base = SimpleNamespace(_count=23)
-    tracker = Mock()
-    tracker.update.return_value = [[20, 10, 80, 90, 24, 0.91, 0, 0], [0, 0, 10, 10, 25, 0.8, 2, 1]]
-
-    def constructor(args):
-        """Повторяет сброс счётчика в upstream BYTETracker.__init__."""
-        base._count = 0
-        return tracker
-
-    monkeypatch.setitem(
-        sys.modules, "ultralytics.trackers.byte_tracker", SimpleNamespace(BYTETracker=constructor)
-    )
-    monkeypatch.setitem(
-        sys.modules, "ultralytics.trackers.basetrack", SimpleNamespace(BaseTrack=base)
-    )
-    adapter = ByteTrackTracker(5)
-    result = adapter.update("boxes", SimpleNamespace(shape=(100, 200, 3)))
-    assert base._count == 23
-    assert result == [{"track_id": 24, "confidence": 0.91, "bbox": [0.1, 0.1, 0.4, 0.9]}]
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        detector = SharedPersonDetector(
+            client,
+            "http://shared-cv/v1/person-tracks",
+            "",
+            "camera-1",
+            "session-1",
+            Mock(original=Mock(return_value=b"jpeg")),
+            2,
+        )
+        for _ in range(2):
+            tracks = detector.detect("frame", datetime.now(UTC))
+            assert SharedTrackMapper().update(tracks, "frame") == [
+                {"track_id": 24, "confidence": 0.91, "bbox": [0.1, 0.1, 0.4, 0.9]},
+            ]
+    assert len(requests) == 2
+    assert all("authorization" not in request.headers for request in requests)
 
 
 def test_rtsp_probe_timeout_and_secret_safe_output(monkeypatch):
@@ -77,7 +68,7 @@ def test_rtsp_probe_timeout_and_secret_safe_output(monkeypatch):
 def test_reader_reconnect_and_latest_frame_queue(monkeypatch):
     """Сбой decoder приводит к reconnect; очередь содержит только последний свежий кадр."""
     repository = Mock()
-    monkeypatch.setattr("workers.vision.close_old_connections", Mock())
+    monkeypatch.setattr("workers.capture.close_old_connections", Mock())
     first, second = Mock(), Mock()
     first.read.return_value = None
     source_factory = Mock(side_effect=[first, second])
@@ -88,8 +79,9 @@ def test_reader_reconnect_and_latest_frame_queue(monkeypatch):
         """Отдаёт два кадра и завершает тест без ожидания настоящего потока."""
         nonlocal count
         count += 1
-        if count == 2:
+        if count == 3:
             reader.stop.set()
+            return None
         return f"frame-{count}"
 
     second.read.side_effect = read
@@ -107,7 +99,7 @@ def test_camera_flush_failure_is_isolated():
     """Неудачное сохранение evidence одной камеры не распространяет исключение в worker loop."""
     pipeline = Mock()
     pipeline.flush.side_effect = OSError("disk_full")
-    entry = {"pipeline": pipeline, "reader": SimpleNamespace(camera={"id": "camera-1"})}
+    entry = {"pipeline": pipeline, "camera": {"id": "camera-1"}}
     assert not flush_entry(entry, "timestamp", force=True)
     pipeline.flush.side_effect = None
     assert flush_entry(entry, "timestamp", force=True)

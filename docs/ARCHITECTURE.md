@@ -1,79 +1,77 @@
-<!-- docs/ARCHITECTURE.md: Фактическая архитектура завершённой миграции. -->
+<!-- docs/ARCHITECTURE.md: Фактическая архитектура с независимым CPU-захватом. -->
 # Архитектура Warehouse Perimeter Watch
 
-## Источники правил
+## Правила и границы
 
-Приоритет: `docs-specification.md`, рабочие контракты проекта, затем
+Приоритет имеют актуальные требования пользователя, затем
+`docs-specification.md` и рабочие контракты, далее
 [shared_infrasktructure/docs](https://github.com/Amadu-A/shared_infrasktructure/tree/main/docs).
-Физическая организация Django-приложений ориентируется на
-[Megano](https://github.com/Amadu-A/Megano). Все комментарии и docstrings пишутся
-по-русски. ТЗ задаёт Python 3.12 и Django 5.2 LTS.
+Структура Django-приложений ориентируется на [Megano](https://github.com/Amadu-A/Megano).
+Документация, комментарии и docstrings — на русском.
 
-## Слои и направление зависимостей
+    interface / workers → application → domain
+                              ↓
+                            ports ← repositories / infrastructure
 
-    interface / workers
-            ↓
-       application → domain
-            ↓
-          ports ← repositories / infrastructure
+Transport содержит CBV, DRF, сериализацию и права HTTP; application координирует
+порты и транзакции, domain проверяет геометрию и расписание. ORM сосредоточен в
+repositories. Concrete adapters создаются в `core/container.py`.
 
-`src/interface` содержит только CBV, DRF, сериализацию, проверку входа и HTTP ответы.
-`src/application` реализует операции и объявляет порты. `src/domain` не импортирует
-Django, ORM или сетевые адаптеры. `src/repositories` содержит ORM-запросы;
-`src/infrastructure` содержит файловое хранилище, криптографию, Redis, RTSP,
-YOLO/ByteTrack, PDF, SMTP, Telegram и outbox publisher. Единственный composition root
-`src/core/container.py` собирает конкретные реализации. Маршруты передают готовые
-factories через `.as_view()`. Worker tasks вызывают use-cases, а не дублируют их.
+## Захват и распознавание
 
-## Django и миграции
+`workers.capture` запускается всегда. Отдельный CPU-декодер каждой камеры читает
+RTSP через OpenCV/FFmpeg TCP с timeout и backoff. Очередь декодера содержит только
+последний кадр. `PublishCameraFrame` публикует подписанный JPEG с линией в
+`warehouse:frame:<camera_id>`, затем исходный JPEG с camera session/sequence/time
+в `warehouse:capture:<camera_id>`. Оба ключа имеют конечный TTL. DB status
+обновляется захватом; API не показывает LIVE после истечения JPEG.
 
-`accounts_app` имеет прежний label `accounts`, `persistence_app` — `persistence`.
-Начальные миграции перенесены без смены labels, имён таблиц и связей.
-`AUTH_USER_MODEL = accounts.User` сохраняется. При запуске
-`makemigrations --check --dry-run` изменений схемы нет. Перед применением миграций
-к постоянной базе нужен обычный backup и контейнерные тесты на отдельном PostgreSQL.
+`workers.vision` запускается только в профиле `inference` при `VISION_ENABLED=true`.
+Он читает исходники из Redis, отбрасывает повторные и просроченные кадры и
+обращается к явному `VISION_INFERENCE_URL`. Состояние каждого camera pipeline
+изолировано; reconnect, изменения камеры/линии и большой перерыв сбрасывают
+сессию трекинга. Отказ внешнего CV API не влияет на публикацию live JPEG.
+Этот процесс не открывает RTSP, не расшифровывает реквизиты камеры и не пишет
+live-cache. Доменные события и pending evidence по-прежнему обрабатывает
+`CameraPipeline`, включая гистерезис, направление, возраст трека и расписание.
 
-`templates/` и `static/` находятся в корне. Внешняя статика собирается командой
-`collectstatic`, приватные media отдаются только после проверки прав.
-Исходный архив запущенной сборки включает Python, HTML, CSS, JS, тесты, инструкцию
-сборки и полный текст AGPL-3.0, исключая секреты и runtime данные.
+В проекте нет локального model runtime, весов, Ultralytics, PyTorch или CUDA.
+Расположение GPU, модель и tracker принадлежат shared-infrastructure.
+[Контракт CV API](SHARED_CV_API.md) описывает реализованный клиент и требования
+к будущему совместимому провайдеру. Наличие такого провайдера не подтверждено;
+`shared-vlm` Chat Completions не является автоматической заменой person tracking.
+Распознавание остаётся выключенным до согласования и benchmark.
 
-## Обработка камеры и события
+Это изменение требования пользователя заменяет положения исходного ТЗ о
+проектной модели YOLO и локальном GPU. Правила нарушений, история, отчёты,
+аутентификация и контракты существующего HTTP API сохранены.
 
-Vision process держит одну модель YOLO и отдельные decoder, tracker и pipeline
-для каждой камеры. Последний JPEG имеет TTL в project Redis. Домен проверяет
-возраст track, гистерезис, границы отрезка, направление и расписание в timezone
-объекта. Нарушение и durable outbox записываются в одной DB-транзакции;
-оригинальное и размеченное фото хранятся в private media. Повтор события
-с тем же ключом идемпотентен. Отказ одной камеры не останавливает остальные.
+## Данные и уведомления
 
-## Процессы и сети
+`accounts_app` сохраняет label `accounts`, `persistence_app` — `persistence`.
+Таблицы, миграции и `AUTH_USER_MODEL=accounts.User` не меняются.
+Нарушение и outbox записываются в одной DB-транзакции, доказательства находятся
+в private media. Ключ события обеспечивает идемпотентность. Флаги внешних
+уведомлений имеют приоритет над настройками кабинета.
 
-Одна codebase запускает web, один выбранный vision-процесс, notification worker
-и scheduler. PostgreSQL, Redis и media принадлежат проекту. Рабочие worker и
-scheduler подключаются к внешней сети `ai-shared` для project vhost/user общего
-RabbitMQ; тестовый контейнер подключается к ней только на время integration тестов.
-Web публикуется на `127.0.0.1:8086` по умолчанию; Redis и PostgreSQL наружу не
-публикуются. Флаги уведомлений в `.env` имеют приоритет над настройками UI.
+Celery использует проектные vhost/user и ресурсы `warehouse.*`. Gossip, mingle,
+worker event heartbeat и remote control выключены, чтобы не обращаться к
+`celery.pidbox`/`celeryev` за пределами разрешённого namespace. AMQP heartbeat
+транспорта сохраняется. Временный consumer проверяется контейнерным integration
+тестом на отдельной очереди, не читая рабочую очередь уведомлений.
 
-## Сборка и профили
+## Контейнеры и сеть
 
-В репозитории один `Dockerfile` со стадиями `source`, `base`, `vision` и `testing`.
-Один `compose.yaml` описывает рабочие сервисы и изолированные тестовые сервисы.
-Профиль `gpu` запускает `vision` с резервированием NVIDIA GPU; профиль `cpu`
-запускает `vision-cpu` без доступа к GPU. `watch.sh deploy` выбирает профиль по
-`VISION_DEVICE` и останавливает альтернативный vision-процесс.
-Профиль `tests` использует отдельные PostgreSQL и Redis; рабочие данные не затрагиваются.
-Старый каталог `legacy/` удалён после переноса активного кода.
+Один Dockerfile: `source`, `base`, `ops`, `testing`. Один Compose:
+web, camera-capture, notification-worker, scheduler, PostgreSQL, Redis,
+необязательный inference; профили `ops`, `tests`, `inference`.
+GPU reservation и bind model weights удалены. CPU-зависимости входят в base.
 
-## Проверки
+Web/capture и данные работают в private network. Только потребители внешних
+сервисов и одноразовые проверки подключаются к `ai-shared`. RabbitMQ/CV runtime
+в Compose проекта отсутствуют. `preflight` проверяет AMQP из общей сети,
+`rabbit` настраивает только проектные credentials/права уже работающего брокера.
+Shared lifecycle остаётся у общей инфраструктуры.
 
-Архитектурные тесты проверяют запрещённые зависимости, отсутствие ORM
-в transport/workers, все project endpoints через CBV, русские docstrings,
-расположение script tags и безопасность DOM. Регрессионные тесты сохраняют
-labels/таблицы и состав архива. Остальные проверки охватывают domain,
-use-cases, HTTP, outbox, отчёты, frontend и браузерные сценарии. Контейнерные
-тесты отдельно проверяют PostgreSQL, Redis и namespace RabbitMQ.
-
-Команды проверок, развёртывания и ручной приёмки приведены в
-[OPERATIONS.md](OPERATIONS.md) и [VALIDATION.md](VALIDATION.md).
+Проверки, команды развёртывания и ручная приёмка:
+[OPERATIONS.md](OPERATIONS.md), [VALIDATION.md](VALIDATION.md).

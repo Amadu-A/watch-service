@@ -18,7 +18,7 @@ Transport обрабатывает authentication, serializers и HTTP envelopes
 проверяет роли/инварианты и координирует ports. Domain не импортирует framework или infrastructure.
 ORM, сетевые clients и rendering принадлежат infrastructure. `core/container.py` — явный
 composition root; serializers/views не читают ORM, не создают adapters и не ищут зависимости.
-Celery tasks вызывают use-cases; vision worker управляет жизненным циклом camera-local pipelines.
+Celery tasks вызывают use-cases; capture управляет CPU-декодерами, inference — camera-local pipelines.
 
 Все HTTP endpoints — CBV; `.as_view()` получает factories и providers в `config/urls.py`.
 API v1 использует session authentication/CSRF, UUID, даты с timezone, allow-list фильтров,
@@ -46,9 +46,10 @@ CI `.github/workflows/checks.yaml` выполняет ту же инструкц
 
 При изменениях добавлять проверки поведения, включая отказ адаптера и права доступа.
 Проверки существующих сценариев не удалять ради успешного нового теста.
-Vision тесты проверяют наши mappings/lifecycle на fake adapters, а не internals YOLO.
-ByteTrack требует отдельного `lap`; он закреплён в vision extra, автоматическая
-установка packages внутри работающего vision container выключена.
+Capture/inference тесты проверяют публикацию без detector, свежесть, reconnect,
+изоляцию камер и валидацию внешнего CV-контракта. Модели, трекинг и физическое
+GPU-размещение принадлежат shared runtime; локальные ML-зависимости запрещены
+архитектурным тестом. Контракт клиента описан в `SHARED_CV_API.md`.
 LiveServer SQLite отключает `cached_statements` для устранения
 [известной гонки CPython](https://github.com/python/cpython/issues/118172);
 production и контейнерные integration тесты работают на PostgreSQL.

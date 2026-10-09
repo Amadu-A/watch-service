@@ -1,5 +1,5 @@
 # compose.yaml
-# Изолированный project state; только worker и beat используют external shared RabbitMQ.
+# CPU-захват и приватные данные проекта; внешние RabbitMQ и CV API принадлежат shared stack.
 name: warehouse-perimeter-watch
 
 x-logging: &logging
@@ -25,22 +25,9 @@ x-app: &app
     redis:
       condition: service_healthy
 
-x-vision: &vision
-  <<: *app
-  build:
-    context: .
-    target: vision
-  command: [python, -m, workers.vision]
-  volumes: [media:/app/media, './models:/app/models:ro']
-  healthcheck:
-    test: [CMD, python, -c, 'import os, redis; assert redis.Redis.from_url(os.environ["REDIS_URL"]).get("warehouse:vision:ready")']
-    interval: 15s
-    timeout: 5s
-    retries: 5
-    start_period: 90s
-
 services:
   ops:
+    image: warehouse-perimeter-watch-ops
     build:
       context: .
       target: ops
@@ -54,6 +41,16 @@ services:
       - .:/workspace
     user: "${WATCH_UID:-1000}:${WATCH_GID:-1000}"
     networks: [private]
+    restart: "no"
+    logging: *logging
+  broker-check:
+    image: warehouse-perimeter-watch-ops
+    profiles: [ops]
+    env_file:
+      - path: .env
+        required: false
+    command: [check-broker]
+    networks: [shared]
     restart: "no"
     logging: *logging
   postgres:
@@ -90,22 +87,29 @@ services:
       interval: 15s
       timeout: 8s
       retries: 5
-  vision:
-    <<: *vision
-    profiles: [gpu]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['${VISION_GPU_ID:-0}']
-              capabilities: [gpu]
-  vision-cpu:
-    <<: *vision
-    profiles: [cpu]
+  camera-capture:
+    <<: *app
+    command: [python, -m, workers.capture]
+    healthcheck:
+      test: [CMD, python, -c, 'from core.config import Settings; from redis import Redis; assert Redis.from_url(Settings().redis_url).get("warehouse:capture:ready")']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  inference:
+    <<: *app
+    profiles: [inference]
+    command: [python, -m, workers.vision]
+    networks: [private, shared]
+    healthcheck:
+      test: [CMD, python, -c, 'from core.config import Settings; from redis import Redis; assert Redis.from_url(Settings().redis_url).get("warehouse:inference:ready")']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
   notification-worker:
     <<: *app
-    command: [celery, -A, workers.celery_app, worker, --loglevel=INFO, --concurrency=2, -Q, warehouse.notifications]
+    command: [celery, -A, workers.celery_app, worker, --loglevel=INFO, --concurrency=2, --without-gossip, --without-mingle, --without-heartbeat, -Q, warehouse.notifications]
     networks: [private, shared]
   scheduler:
     <<: *app
@@ -157,6 +161,7 @@ services:
       TEST_EXTERNAL_SERVICES: 'true'
       RUN_E2E: 'true'
       NOTIFICATIONS_ENABLED: 'false'
+      VISION_ENABLED: 'false'
       MEDIA_ROOT: /tmp/warehouse-test-media
     networks: [test-private, shared]
     logging: *logging

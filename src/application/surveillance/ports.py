@@ -1,6 +1,7 @@
 # src/application/surveillance/ports.py
-"""Порты realtime обработки: decoder, resident detector, camera-local tracker и annotator."""
+"""Порты CPU-декодирования, внешних person tracks и формирования доказательств."""
 
+from datetime import datetime
 from typing import Protocol
 
 
@@ -17,10 +18,10 @@ class CameraSource(Protocol):
 
 
 class PersonDetector(Protocol):
-    """Преобразует кадр в detections класса person одной resident моделью."""
+    """Получает detections класса person через внешний согласованный CV-контракт."""
 
-    def detect(self, frame):
-        """Возвращает detections без создания нового model instance."""
+    def detect(self, frame, timestamp: datetime):
+        """Возвращает person tracks в контексте камеры и времени исходного кадра."""
         ...
 
 

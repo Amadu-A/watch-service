@@ -1,40 +1,61 @@
-<!-- docs/OPERATIONS.md: Проверки и эксплуатация через единый scripts/watch.sh. -->
+<!-- docs/OPERATIONS.md: Развёртывание CPU-захвата и необязательного shared inference. -->
 # Эксплуатация
 
-Все команды запускаются из корня проекта. В репозитории ровно один `Dockerfile` и
-один `compose.yaml`. Профили `gpu`, `cpu` и `tests` находятся в этом же Compose файле.
-`watch.sh` читает `.env.example`, затем приватный `.env`; файл не исполняется как shell.
+Все команды выполняются из корня проекта. В репозитории один Dockerfile,
+один compose.yaml и профили `ops`, `tests`, `inference`. `watch.sh` читает
+`.env.example`, затем приватный `.env` как данные, без выполнения shell.
 
-## Рабочая станция Windows
+## Windows: проверки и публикация владельцем
 
-Нужны Git Bash, `uv`, Node.js. Браузер Chromium устанавливается первой командой.
-В PowerShell:
+Нужны Git Bash, uv и Node.js. PowerShell:
 
 ```powershell
+$env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh browsers
 & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh local-check
 git status --short
-& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh commit "refactor: consolidate docker configuration"
+& "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh commit "fix: separate CPU capture from shared inference"
 & "C:\Program Files\Git\bin\bash.exe" scripts/watch.sh push
 ```
 
-`local-check` запускает Ruff, Django check, проверку миграций, Node, Python и
-Chromium E2E. `commit` повторяет проверки; коммит и push выполняет владелец репозитория.
+`local-check` выполняет Ruff, Django check, проверку миграций, синтаксис JS,
+Node, Python tests с branch coverage и Chromium E2E. `commit` повторяет проверки.
+Коммит и push выполняет владелец репозитория.
 
-## Сервер: подготовка
+## Сервер: первый запуск и обновление
 
-Нужны Docker Engine с Compose plugin, доступ к общей сети RabbitMQ и Git.
-`uv` и Python на хосте не нужны: `uv` находится в единственном `Dockerfile`.
-Профиль `ops` выполняет подготовку в одноразовом контейнере. Только команда
-`rabbit` временно подключает к нему Docker socket для `rabbitmqctl` в выбранном
-контейнере; web и workers доступа к socket не имеют.
+Нужны Docker Engine с Compose plugin и Git. uv и Python на хосте не нужны.
+Стадия `ops` выполняет подготовку в одноразовом контейнере. Только команда
+`rabbit` получает Docker socket для проектного provisioning; рабочие сервисы
+и `broker-check` доступа к socket не имеют.
 
 ```bash
 cd /home/main/projects/watch-service
 git pull --ff-only origin main
 bash scripts/watch.sh init
-# Команда создала .env с APP_ENV=production и четырьмя секретами.
-# При наличии HTTPS proxy добавьте реальные DJANGO_ALLOWED_HOSTS и DJANGO_CSRF_TRUSTED_ORIGINS.
+# init сохраняет существующий .env; новый файл содержит APP_ENV и четыре секрета.
+```
+
+Для обновления со старой локальной YOLO-схемы удалите устаревшие флаги и GPU-настройки:
+
+```bash
+sed -i '/^VISION_\(ENABLED\|DEVICE\|GPU_ID\|MODEL\)=/d' .env
+```
+
+После этого inference выключен по умолчанию, а CPU capture будет запущен.
+Другие настройки и секреты сохраняются. Реальные внешние уведомления по
+умолчанию выключены; если были включены раньше, их флаги сохраняют силу.
+
+RabbitMQ принадлежит общей инфраструктуре. Если **существующий** контейнер
+`shared-rabbitmq-1` остановлен, оператор общей инфраструктуры запускает его:
+
+```bash
+docker start shared-rabbitmq-1
+```
+
+Затем из watch-service:
+
+```bash
 bash scripts/watch.sh rabbit shared-rabbitmq-1
 bash scripts/watch.sh test-containers
 bash scripts/watch.sh deploy
@@ -42,67 +63,68 @@ bash scripts/watch.sh status
 curl -fsS http://127.0.0.1:8086/health/live
 ```
 
-`init` сохраняет уже существующий `.env` без изменений. Пароль PostgreSQL
-проверяется `preflight` до запуска БД. Настройки по умолчанию находятся в
-`src/core/config.py`; [README](../README.md#что-записать-в-env-на-сервере)
-перечисляет все необходимые и условные строки `.env`.
+`rabbit` проверяет состояние и ждёт готовности приложения RabbitMQ. Он подключает
+выбранный брокер к `ai-shared` при необходимости и настраивает проектные vhost/user
+`warehouse-watch` с правами на `warehouse.*`. Если контейнер уже подключён без alias
+`rabbitmq`, сообщение укажет точную строку `RABBITMQ_HOST=<имя контейнера>` для `.env`.
+Shared контейнеры не запускаются и не пересоздаются скриптом приложения.
 
-`rabbit` подключает выбранный существующий контейнер к сети `ai-shared` при
-необходимости и создаёт/обновляет только проектный vhost/user `warehouse-watch`.
-Сервис RabbitMQ не входит в Compose проекта и не перезапускается. Если контейнер
-уже в сети без alias `rabbitmq`, задайте его настоящее имя в `RABBITMQ_HOST`.
+`preflight` проверяет настройки, затем DNS и AMQP-вход из общей сети. Отключённые
+внешние уведомления не отменяют зависимость scheduler/worker от брокера.
+`deploy` собирает сервисы, выполняет контейнерные tests до миграций, запускает
+`camera-capture` и пересоздаёт процессы проекта. Старые project vision-контейнеры
+удаляются через `--remove-orphans`; рабочая БД и media сохраняются.
+Требуется чистый checkout. Перед изменением постоянной БД нужен обычный backup.
 
-При начальном `VISION_ENABLED=false` vision-образ не собирается и процесс не
-запускается. Камеры пока можно зарегистрировать, но кадры появятся после
-включения vision. Для GPU положите веса в `models/` или выполните
-`bash scripts/watch.sh model`, задайте `VISION_ENABLED=true`,
-`VISION_DEVICE=0` и при необходимости `VISION_GPU_ID`. Затем повторите
-`bash scripts/watch.sh deploy`. Серверу нужен NVIDIA Container Toolkit.
+Первое создание администратора: `bash scripts/watch.sh admin`.
+Импорт настроенных камер: `bash scripts/watch.sh import-cameras`.
 
-`test-containers` проверяет код на временных PostgreSQL/Redis и проектном
-namespace RabbitMQ. `deploy` повторяет тесты, применяет миграции и пересоздаёт
-только процессы проекта. Он не очищает рабочую БД/media. Перед обновлением
-существующей БД нужен актуальный backup. При ошибке тестов развёртывание
-останавливается до миграций.
-
-Web по умолчанию доступен только на `127.0.0.1:8086`. Первичную проверку
-можно провести через SSH-туннель на `localhost:8086` в Chrome/Firefox. Для
-штатного доступа нужен HTTPS reverse proxy; локальное исключение Secure cookies
-не одинаково поддерживается браузерами. Для MJPEG отключите buffering
-в proxy и разрешите длительные соединения. Порты PostgreSQL
-и Redis наружу не публикуются.
-
-## Обновление и диагностика
+## Проверка изображения
 
 ```bash
-cd /home/main/projects/watch-service
-git pull --ff-only origin main
-bash scripts/watch.sh test-containers
-bash scripts/watch.sh deploy
 bash scripts/watch.sh status
-bash scripts/watch.sh logs web
-bash scripts/watch.sh logs vision
-bash scripts/watch.sh logs notification-worker
-bash scripts/watch.sh logs scheduler
+bash scripts/watch.sh logs camera-capture
+docker compose -f compose.yaml exec -T redis redis-cli --scan --pattern 'warehouse:frame:*'
 ```
 
-При `VISION_ENABLED=false` vision-сервис отсутствует; после включения GPU
-смотрите `bash scripts/watch.sh logs vision`.
-Команды развёртывания требуют заполненного `.env`; `preflight` проверяет его
-до запуска контейнеров. `watch.sh stop` останавливает только процессы проекта.
-PostgreSQL, Redis, media и общий RabbitMQ не удаляются. `deploy` повторяет pull,
-поэтому после ручного pull возможна строка `Already up to date`.
+В status должен присутствовать здоровый `camera-capture`. Для включённой
+доступной камеры появляются ключи JPEG. В кабинете откройте её карточку,
+через 5–10 секунд нажмите «Обновить кадр», затем проверьте мониторинг/MJPEG.
+Успешная кнопка «Проверить RTSP» подтверждает разовое получение кадра; live
+изображение публикует отдельный capture-процесс. При отключении камеры или
+обрыве соединения свежесть истекает и LIVE исчезает.
 
-## Уведомления и хранение
+Web публикуется на `127.0.0.1:8086`. Используйте HTTPS proxy либо SSH-туннель
+на localhost в Chrome/Firefox для первичной проверки. Для MJPEG отключите
+proxy buffering и разрешите длительные соединения. Порты БД/Redis не публикуются.
 
-Пока `NOTIFICATIONS_ENABLED=false`, внешняя отправка запрещена независимо от UI.
-Для Email/Telegram заполните значения, перечисленные в README, включите нужные
-серверные флаги, создайте собственных получателей в кабинете и проверьте тестовую
-отправку. Worker хранит попытки и ограничивает повторы. При аварии между приёмом
-сообщения провайдером и записью результата в БД возможна повторная доставка.
+## Внешнее распознавание
 
-Очистка запускается scheduler раз в минуту. При недоступном broker выполните
-`bash scripts/watch.sh retention` вручную и контролируйте очередь после восстановления.
-Срок хранения задаёт `MEDIA_RETENTION_DAYS` (не более 30 дней); бэкапы и внешние
-архивы логов нужно ограничивать отдельно. Ключ `CAMERA_CREDENTIALS_KEY` сохраните
-в управляемом хранилище: без него нельзя расшифровать уже записанные реквизиты камер.
+Для картинки VISION_ENABLED включать не требуется. Удалённый inference включают
+после подтверждения [CV-контракта](SHARED_CV_API.md) и проверки производительности:
+`VISION_ENABLED=true`, реальный `VISION_INFERENCE_URL`, при необходимости
+`VISION_INFERENCE_TOKEN`. Затем выполняют `test-containers` и `deploy`.
+GPU, веса и модель настраиваются только в shared-infrastructure.
+Без согласованного CV API новые нарушения автоматически не создаются.
+
+## Уведомления, хранение и диагностика
+
+```bash
+bash scripts/watch.sh logs web
+bash scripts/watch.sh logs notification-worker
+bash scripts/watch.sh logs scheduler
+# При включённом внешнем распознавании:
+bash scripts/watch.sh logs inference
+```
+
+Gossip/mingle/worker events выключены для соответствия проектным правам RabbitMQ.
+Контейнерные tests дополнительно запускают временный Celery consumer на отдельной
+`warehouse.test.*` очереди. Рабочую очередь они не читают.
+
+Для Email/Telegram заполните параметры из README, включите серверные флаги и
+проверьте собственных получателей. Доставка имеет семантику «как минимум один раз»:
+сбой после внешнего приёма может привести к повторной отправке.
+Очистка запускается scheduler; при отказе broker доступен `watch.sh retention`.
+Хранение ограничено 30 днями, Docker logs — ротацией 10 MB × 5 файлов.
+Сохраняйте CAMERA_CREDENTIALS_KEY: без него реквизиты камер не расшифровать.
+`watch.sh stop` останавливает только процессы проекта.

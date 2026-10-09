@@ -106,3 +106,18 @@ def test_runtime_does_not_import_archived_packages():
             )
             for name in names:
                 assert not name.startswith(obsolete), (path, name)
+
+
+def test_project_runtime_has_no_local_model_or_physical_gpu_dependencies():
+    """Бизнес-проект использует CPU-захват и shared CV API без локальных моделей или CUDA."""
+    forbidden = ("ultralytics", "torch", "torchvision", "vllm", "cupy")
+    for path in (ROOT / "src").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert not any(item.name.startswith(forbidden) for item in node.names), path
+            elif isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith(forbidden), path
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    assert "driver: nvidia" not in compose and "device_ids:" not in compose
+    assert "VISION_GPU_ID" not in compose and "./models" not in compose

@@ -1,12 +1,11 @@
 # src/infrastructure/vision.py
-"""OpenCV RTSP, resident YOLO detector, отдельный ByteTrack каждой камеры и JPEG разметка."""
+"""CPU-декодирование RTSP и JPEG/MP4 разметка без нейросетевых моделей."""
 
 import io
 import os
 import subprocess
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from PIL import Image, ImageDraw, ImageFont
@@ -74,67 +73,6 @@ class RTSPCameraSource:
     def close(self) -> None:
         """Освобождает handle decoder независимо от состояния других камер."""
         self.capture.release()
-
-
-class UltralyticsPersonDetector:
-    """Создаёт одну YOLO model на worker и явно использует deployment device."""
-
-    def __init__(self, model_path: str, device: str):
-        """Загружает локальные weights один раз, без скачивания при inference."""
-        from ultralytics import YOLO
-
-        if not Path(model_path).is_file():
-            raise RuntimeError("vision_model_missing")
-        self.model, self.device = YOLO(model_path), device
-
-    def detect(self, frame):
-        """Возвращает person boxes; ByteTrack получает CPU numpy representation."""
-        result = self.model.predict(
-            frame, classes=[0], conf=0.1, device=self.device, verbose=False
-        )[0]
-        return result.boxes.cpu().numpy()
-
-
-class ByteTrackTracker:
-    """Содержит track state одной камеры, никогда не разделяемый между потоками."""
-
-    def __init__(self, fps: int):
-        """Создаёт tracker с ограниченным track_buffer."""
-        from ultralytics.trackers.basetrack import BaseTrack
-        from ultralytics.trackers.byte_tracker import BYTETracker
-
-        previous_count = BaseTrack._count
-        self.tracker = BYTETracker(
-            SimpleNamespace(
-                track_high_thresh=0.25,
-                track_low_thresh=0.1,
-                new_track_thresh=0.25,
-                track_buffer=6 * fps,
-                match_thresh=0.8,
-                fuse_score=True,
-            )
-        )
-        # Конструктор Ultralytics сбрасывает общий счётчик: сохраняем ID существующих камер.
-        BaseTrack._count = max(previous_count, BaseTrack._count)
-
-    def update(self, detections, frame) -> list[dict]:
-        """Преобразует x1,y1,x2,y2,id,score,class,index в нормализованные DTO."""
-        height, width = frame.shape[:2]
-        result = []
-        for values in self.tracker.update(detections, frame):
-            if int(values[6]) != 0:
-                continue
-            result.append(
-                {
-                    "track_id": int(values[4]),
-                    "confidence": float(values[5]),
-                    "bbox": [
-                        max(0.0, min(1.0, float(v) / (width if index % 2 == 0 else height)))
-                        for index, v in enumerate(values[:4])
-                    ],
-                }
-            )
-        return result
 
 
 class OpenCVFrameRenderer:
@@ -244,3 +182,14 @@ class OpenCVFrameRenderer:
                 writer.release()
             path.unlink(missing_ok=True)
             browser_path.unlink(missing_ok=True)
+
+
+def decode_jpeg(jpeg: bytes):
+    """Декодирует CPU JPEG из Redis для доменного пайплайна доказательств."""
+    import cv2
+    import numpy as np
+
+    frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise ValueError("invalid_capture_jpeg")
+    return frame

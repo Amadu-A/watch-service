@@ -23,6 +23,7 @@ os.environ["NOTIFICATIONS_ENABLED"] = "false"
 os.environ["EMAIL_NOTIFICATIONS_ENABLED"] = "false"
 os.environ["TELEGRAM_NOTIFICATIONS_ENABLED"] = "false"
 os.environ["EVENT_CLIP_ENABLED"] = "false"
+os.environ["VISION_ENABLED"] = "false"
 
 _base_settings = import_module("config.settings")
 

@@ -54,8 +54,10 @@ class Settings(BaseSettings):
     notification_max_attempts: int = Field(default=5, ge=1, le=20)
     notification_timeout_seconds: int = Field(default=15, ge=1, le=120)
     vision_enabled: bool = False
-    vision_device: str = "cpu"
-    vision_model: str = "models/yolo11n.pt"
+    vision_inference_url: str = ""
+    vision_inference_token: SecretStr = SecretStr("")
+    vision_inference_timeout_seconds: float = Field(default=2, gt=0, le=10)
+    capture_fps: int = Field(default=5, ge=1, le=30)
     vision_fps: int = Field(default=5, ge=1, le=30)
     vision_frame_ttl_seconds: int = Field(default=10, ge=1)
     vision_track_ttl_seconds: int = Field(default=30, ge=1)
@@ -79,6 +81,14 @@ class Settings(BaseSettings):
                 raise ValueError("В production требуется DJANGO_SECRET_KEY")
             if self.database_engine != "postgresql" or self.django_debug:
                 raise ValueError("В production требуется PostgreSQL и отключённый DEBUG")
-            if self.vision_enabled and self.vision_device == "cpu":
-                raise ValueError("CPU в production запрещён: задайте VISION_DEVICE явно")
+        if self.vision_enabled:
+            from urllib.parse import urlsplit
+
+            endpoint = urlsplit(self.vision_inference_url)
+            if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
+                raise ValueError(
+                    "VISION_ENABLED требует VISION_INFERENCE_URL согласованного CV API"
+                )
+            if endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+                raise ValueError("CV endpoint не должен содержать credentials, query или fragment")
         return self

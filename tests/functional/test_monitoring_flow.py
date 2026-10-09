@@ -28,3 +28,33 @@ def test_administrator_configures_line_and_sees_saved_layout(client_api, client,
     response = client.get("/monitoring/")
     assert response.status_code == 200
     assert b'data-page="monitoring"' in response.content
+
+
+def test_cpu_capture_makes_snapshot_available_without_inference(
+    client_api, camera, isolated_dependencies
+):
+    """Без inference свежий JPEG виден через защищённый HTTP snapshot и содержит линию."""
+    from datetime import UTC, datetime
+    from unittest.mock import Mock
+
+    import numpy as np
+
+    from application.surveillance.capture import PublishCameraFrame
+    from infrastructure.vision import OpenCVFrameRenderer
+
+    renderer = OpenCVFrameRenderer()
+    publisher = PublishCameraFrame(
+        camera,
+        None,
+        renderer,
+        isolated_dependencies,
+        Mock(),
+        "Europe/Moscow",
+    )
+    frame = np.zeros((120, 200, 3), dtype=np.uint8)
+    publisher.process(frame, datetime.now(UTC), "cpu-capture-session")
+    response = client_api.get(f"/api/v1/cameras/{camera['id']}/snapshot")
+    assert response.status_code == 200 and response["Content-Type"] == "image/jpeg"
+    assert response.content.startswith(b"\xff\xd8")
+    client_api.logout()
+    assert client_api.get(f"/api/v1/cameras/{camera['id']}/snapshot").status_code in (401, 403)
